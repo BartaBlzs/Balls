@@ -29,13 +29,15 @@ except ImportError:
     sys.exit("curses not found. On Windows run: pip install windows-curses")
 
 SAVE_PATH = os.path.join(os.path.expanduser("~"), ".pigeon_save.json")
+WALLET_PATH = os.path.join(os.path.expanduser("~"), ".pigeon_wallet.json")
+WALLET_SALT = "PIGEON_WALLET_V1"
 ROUND_SECS = 90
 MIN_W, MIN_H = 70, 20
 RETALIATION_SCORE = 40
-SHOTGUN_FIRE_MIN = 1.4
-SHOTGUN_FIRE_MAX = 2.4
-SHOTGUN_PELLETS = 2
-SHOTGUN_SPEED = 24.0
+SHOTGUN_FIRE_MIN = 2.4
+SHOTGUN_FIRE_MAX = 3.8
+SHOTGUN_PELLETS = 1
+SHOTGUN_SPEED = 18.0
 SHOTGUN_LIFE = 2.0
 SHOTGUN_HIT_PENALTY = 60
 SHOTGUN_HIT_IFRAMES = 0.7
@@ -100,6 +102,32 @@ def write_save(save):
     try:
         with open(SAVE_PATH, "w") as f:
             json.dump(save, f)
+    except OSError:
+        pass
+
+
+def wallet_hash(money):
+    return hashlib.sha256(("%d|%s" % (money, WALLET_SALT)).encode()).hexdigest()
+
+
+def load_wallet():
+    try:
+        with open(WALLET_PATH) as f:
+            data = json.load(f)
+        money = max(0, int(data.get("money", 0)))
+        if data.get("hash") == wallet_hash(money):
+            return money
+    except (OSError, ValueError, TypeError):
+        pass
+    return 0
+
+
+def write_wallet(money):
+    payload = {"money": max(0, int(money))}
+    payload["hash"] = wallet_hash(payload["money"])
+    try:
+        with open(WALLET_PATH, "w") as f:
+            json.dump(payload, f)
     except OSError:
         pass
 
@@ -368,7 +396,7 @@ class Person:
         return [" " + k["head"] + " ", "/|\\", legs]
 
 
-def play(stdscr, save, audio):
+def play(stdscr, save, wallet, audio):
     cursor(0)
     stdscr.nodelay(True)
     stdscr.timeout(0)
@@ -376,7 +404,7 @@ def play(stdscr, save, audio):
     if w < MIN_W or h < MIN_H:
         return None
     size_i, sound_i = size_index(save), sound_index(save)
-    G, MAX_AMMO, REGEN, POOP_COOLDOWN = 35.0, 12.0, 2.2, 0.35
+    G, MAX_AMMO, POOP_COOLDOWN, RELOAD_COOLDOWN = 35.0, 12, 0.3, 1.8
 
     def layout():
         nonlocal h, w, gl, bg, clouds
@@ -393,10 +421,13 @@ def play(stdscr, save, audio):
     px, py, vx, vy, face, flap = w / 2, 4.0, 0.0, 0.0, 1, 0.0
     ammo, cooldown, score, streak = MAX_AMMO, 0.0, 0, 0
     no_ammo_flash = 0.0
+    reloading = False
     retaliation_on = False
     retaliation_banner = 0.0
     hurt_iframes = 0.0
     hit_notice = 0.0
+    reward_flash = 0.0
+    reward_tier = 0
     start = last = time.perf_counter()
 
     while True:
@@ -440,12 +471,15 @@ def play(stdscr, save, audio):
         px = min(max(0, px + vx * dt), w - 6)
         py = min(max(3, py + vy * dt), gl - 8)
         flap += dt * (8 + abs(vx) * 0.3)
-        ammo = min(MAX_AMMO, ammo + REGEN * dt)
         cooldown = max(0.0, cooldown - dt)
         no_ammo_flash = max(0.0, no_ammo_flash - dt)
         retaliation_banner = max(0.0, retaliation_banner - dt)
         hurt_iframes = max(0.0, hurt_iframes - dt)
         hit_notice = max(0.0, hit_notice - dt)
+        reward_flash = max(0.0, reward_flash - dt)
+        if reloading and cooldown <= 0:
+            ammo = MAX_AMMO
+            reloading = False
 
         if (not retaliation_on) and score >= RETALIATION_SCORE:
             retaliation_on = True
@@ -453,14 +487,19 @@ def play(stdscr, save, audio):
             for p in people:
                 p.gun_cd = min(p.gun_cd, random.uniform(0.2, 0.8))
 
-        if want_drop and cooldown <= 0:
+        if want_drop and cooldown <= 0 and not reloading:
             s = SIZES[size_i]
             if ammo >= s["cost"]:
                 ammo -= s["cost"]
                 cooldown = POOP_COOLDOWN
                 poops.append(dict(x=px + (2.5 if face > 0 else 3.5), y=py + 2.0, vy=2.0, size=size_i))
+                if ammo <= 0:
+                    reloading = True
+                    cooldown = RELOAD_COOLDOWN
             else:
                 no_ammo_flash = 0.6
+        elif want_drop and reloading:
+            no_ammo_flash = 0.6
 
         # ---- people
         for p in people:
@@ -473,7 +512,7 @@ def play(stdscr, save, audio):
                 p.gun_cd -= dt
                 if p.gun_cd <= 0:
                     ox, oy = p.x + 1.5, gl - 2.0
-                    tx, ty = px + 2.5, py + 1.0
+                    tx, ty = px + 2.5 + random.uniform(-7.0, 7.0), py + 1.0 + random.uniform(-3.5, 3.5)
                     dx, dy = tx - ox, ty - oy
                     n = math.hypot(dx, dy) or 1.0
                     bx, by = dx / n, dy / n
@@ -481,8 +520,8 @@ def play(stdscr, save, audio):
                         pellets.append(dict(
                             x=ox,
                             y=oy,
-                            vx=(bx + random.uniform(-0.2, 0.2)) * SHOTGUN_SPEED,
-                            vy=(by + random.uniform(-0.15, 0.15)) * SHOTGUN_SPEED,
+                            vx=(bx + random.uniform(-0.35, 0.35)) * SHOTGUN_SPEED,
+                            vy=(by + random.uniform(-0.3, 0.3)) * SHOTGUN_SPEED,
                             life=SHOTGUN_LIFE,
                         ))
                     p.gun_cd = random.uniform(SHOTGUN_FIRE_MIN, SHOTGUN_FIRE_MAX)
@@ -511,6 +550,14 @@ def play(stdscr, save, audio):
                         mult = min(5, 1 + streak // 2)
                         gained = s["pts"] * mult * Person.KINDS[hit.kind]["mult"]
                         score += gained
+                        new_tier = score // 30
+                        if new_tier > reward_tier:
+                            bonus = (new_tier - reward_tier) * 5
+                            reward_tier = new_tier
+                            wallet["money"] += bonus
+                            write_wallet(wallet["money"])
+                            reward_flash = 1.5
+                            floaters.append([px + 1, max(2.0, py - 1.0), "+$%d" % bonus, 1.1])
                         floaters.append([hit.x + 1, gl - 5.0, "+%d" % gained, 1.0])
                         hit.shout = random.choice(VIP_SHOUTS if hit.kind == "vip" else SHOUTS)
                     hit.stun = 1.3
@@ -590,16 +637,20 @@ def play(stdscr, save, audio):
         mult = min(5, 1 + streak // 2)
         put(stdscr, 0, 1, "SCORE %05d" % score, COL["yellow"] | curses.A_BOLD)
         put(stdscr, 0, 16, "STREAK %d (x%d)" % (streak, mult), COL["magenta"] | curses.A_BOLD)
+        put(stdscr, 0, max(30, w - 26), "MONEY $%d" % wallet["money"], COL["green"] | curses.A_BOLD)
         put(stdscr, 0, w - 12, "TIME %3d" % math.ceil(left), COL["white"] | curses.A_BOLD)
         if retaliation_on:
             put(stdscr, 0, max(1, w // 2 - 10), "RETALIATION ACTIVE", COL["red"] | curses.A_BOLD)
         if retaliation_banner > 0:
             center(stdscr, 2, "PEOPLE FOUND SHOTGUNS - DODGE!", COL["red"] | curses.A_BOLD)
+        if reward_flash > 0:
+            center(stdscr, 3, "+$5 every 30 score!", COL["green"] | curses.A_BOLD)
         bar = int(ammo / MAX_AMMO * 12)
         ammo_attr = COL["red"] | curses.A_BOLD if no_ammo_flash > 0 else COL["cyan"]
         put(stdscr, 1, 1, "SHITTING [%s%s]" % ("#" * bar, "-" * (12 - bar)), ammo_attr)
-        cd_attr = COL["red"] | curses.A_BOLD if cooldown > 0 else COL["green"] | curses.A_BOLD
-        put(stdscr, 1, 24, "CD %s" % ("%.1fs" % cooldown if cooldown > 0 else "READY"), cd_attr)
+        cd_attr = (COL["red"] | curses.A_BOLD) if reloading else ((COL["yellow"] | curses.A_BOLD) if cooldown > 0 else (COL["green"] | curses.A_BOLD))
+        cd_text = "RELOAD %.1fs" % cooldown if reloading else ("CD %.1fs" % cooldown if cooldown > 0 else "CD READY")
+        put(stdscr, 1, 24, cd_text, cd_attr)
         put(stdscr, 1, 38, "SIZE %s (cost %d)" % (SIZES[size_i]["name"], SIZES[size_i]["cost"]), COL["white"])
         put(stdscr, 1, 62, "SOUND %s" % SOUNDS[sound_i]["name"], COL["white"])
         put(stdscr, h - 1, 1, "arrows/WASD fly   SPACE poop   1-4 size   M sound   dodge shotgun fire   Q menu", curses.A_DIM)
@@ -620,6 +671,7 @@ def play(stdscr, save, audio):
     center(stdscr, cy, "TIME'S UP!", COL["yellow"] | curses.A_BOLD)
     center(stdscr, cy + 2, "You hit people for %d points" % score, COL["white"])
     center(stdscr, cy + 3, "NEW BEST!" if new_best else "Best: %d" % save["best"], COL["magenta"] | curses.A_BOLD)
+    center(stdscr, cy + 4, "Wallet: $%d" % wallet["money"], COL["green"] | curses.A_BOLD)
     center(stdscr, cy + 5, "press any key", curses.A_DIM)
     stdscr.refresh()
     time.sleep(0.6)
@@ -694,7 +746,7 @@ def loadout(stdscr, save, audio):
             return
 
 
-def menu(stdscr, save, audio):
+def menu(stdscr, save, wallet, audio):
     items = ["PLAY", "ENTER CODE", "LOADOUT", "QUIT"]
     sel, msg = 0, ""
     while True:
@@ -712,7 +764,7 @@ def menu(stdscr, save, audio):
             center(stdscr, top + 8 + i * 2, text, (COL["yellow"] | curses.A_BOLD) if i == sel else 0)
         if msg:
             center(stdscr, top + 17, msg, COL["red"] | curses.A_BOLD)
-        center(stdscr, top + 19, "Best: %d" % save["best"], COL["magenta"])
+        center(stdscr, top + 19, "Best: %d   Wallet: $%d" % (save["best"], wallet["money"]), COL["magenta"])
         stdscr.refresh()
 
         k = stdscr.getch()
@@ -729,7 +781,7 @@ def menu(stdscr, save, audio):
             return
         msg = ""
         if act == 0:
-            if play(stdscr, save, audio) is None:
+            if play(stdscr, save, wallet, audio) is None:
                 msg = "Terminal too small - need at least %dx%d" % (MIN_W, MIN_H)
         elif act == 1:
             enter_code(stdscr, save)
@@ -742,9 +794,11 @@ def menu(stdscr, save, audio):
 def main(stdscr):
     init_colors()
     save = load_save()
+    wallet = {"money": load_wallet()}
+    write_wallet(wallet["money"])
     audio = Audio()
     try:
-        menu(stdscr, save, audio)
+        menu(stdscr, save, wallet, audio)
     finally:
         audio.cleanup()
 
