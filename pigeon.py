@@ -34,12 +34,13 @@ WALLET_SALT = "PIGEON_WALLET_V1"
 ROUND_SECS = 90
 MIN_W, MIN_H = 70, 20
 RETALIATION_SCORE = 40
-SHOTGUN_FIRE_MIN = 2.4
-SHOTGUN_FIRE_MAX = 3.8
+PLAYER_POINTS_MAX = 20
+SHOTGUN_FIRE_MIN = 2.8
+SHOTGUN_FIRE_MAX = 4.4
 SHOTGUN_PELLETS = 1
-SHOTGUN_SPEED = 18.0
+SHOTGUN_SPEED = 16.0
 SHOTGUN_LIFE = 2.0
-SHOTGUN_HIT_PENALTY = 60
+SHOTGUN_HIT_DAMAGE = 5
 SHOTGUN_HIT_IFRAMES = 0.7
 
 # --------------------------------------------------------------------------- content
@@ -404,7 +405,7 @@ def play(stdscr, save, wallet, audio):
     if w < MIN_W or h < MIN_H:
         return None
     size_i, sound_i = size_index(save), sound_index(save)
-    G, MAX_AMMO, POOP_COOLDOWN, RELOAD_COOLDOWN = 35.0, 12, 0.3, 1.8
+    G, MAX_AMMO, POOP_COOLDOWN, RELOAD_COOLDOWN = 35.0, 14, 0.28, 1.5
 
     def layout():
         nonlocal h, w, gl, bg, clouds
@@ -420,6 +421,7 @@ def play(stdscr, save, wallet, audio):
     poops, pellets, particles, splats, floaters = [], [], [], [], []
     px, py, vx, vy, face, flap = w / 2, 4.0, 0.0, 0.0, 1, 0.0
     ammo, cooldown, score, streak = MAX_AMMO, 0.0, 0, 0
+    player_points = PLAYER_POINTS_MAX
     no_ammo_flash = 0.0
     reloading = False
     retaliation_on = False
@@ -428,6 +430,7 @@ def play(stdscr, save, wallet, audio):
     hit_notice = 0.0
     reward_flash = 0.0
     reward_tier = 0
+    died = False
     start = last = time.perf_counter()
 
     while True:
@@ -599,9 +602,15 @@ def play(stdscr, save, wallet, audio):
                 hurt_iframes = SHOTGUN_HIT_IFRAMES
                 hit_notice = 1.2
                 streak = 0
-                score = max(0, score - SHOTGUN_HIT_PENALTY)
+                player_points = max(0, player_points - SHOTGUN_HIT_DAMAGE)
                 vx = min(24, max(-24, vx + pel["vx"] * 0.15))
                 vy = min(11, max(-11, vy + pel["vy"] * 0.08))
+                if player_points <= 0:
+                    died = True
+                    break
+
+        if died:
+            break
 
         # ---- draw
         stdscr.erase()
@@ -632,11 +641,13 @@ def play(stdscr, save, wallet, audio):
         frames = PIGEON_R if face > 0 else PIGEON_L
         put_sprite(stdscr, int(py), int(px), frames[int(flap) % 2], COL["white"] | curses.A_BOLD)
         if hit_notice > 0:
-            put(stdscr, max(2, int(py) - 1), int(px) - 2, "-%d SHOTGUN!" % SHOTGUN_HIT_PENALTY, COL["red"] | curses.A_BOLD)
+            put(stdscr, max(2, int(py) - 1), int(px) - 2, "-%d SHOTGUN!" % SHOTGUN_HIT_DAMAGE, COL["red"] | curses.A_BOLD)
 
         mult = min(5, 1 + streak // 2)
         put(stdscr, 0, 1, "SCORE %05d" % score, COL["yellow"] | curses.A_BOLD)
         put(stdscr, 0, 16, "STREAK %d (x%d)" % (streak, mult), COL["magenta"] | curses.A_BOLD)
+        hp_attr = (COL["red"] | curses.A_BOLD) if player_points <= SHOTGUN_HIT_DAMAGE else (COL["green"] | curses.A_BOLD)
+        put(stdscr, 0, max(1, w // 2 - 4), "HP %02d" % player_points, hp_attr)
         put(stdscr, 0, max(30, w - 26), "MONEY $%d" % wallet["money"], COL["green"] | curses.A_BOLD)
         put(stdscr, 0, w - 12, "TIME %3d" % math.ceil(left), COL["white"] | curses.A_BOLD)
         if retaliation_on:
@@ -668,7 +679,7 @@ def play(stdscr, save, wallet, audio):
     stdscr.timeout(-1)
     stdscr.erase()
     cy = h // 2 - 3
-    center(stdscr, cy, "TIME'S UP!", COL["yellow"] | curses.A_BOLD)
+    center(stdscr, cy, "YOU DIED!" if died else "TIME'S UP!", COL["red"] | curses.A_BOLD if died else COL["yellow"] | curses.A_BOLD)
     center(stdscr, cy + 2, "You hit people for %d points" % score, COL["white"])
     center(stdscr, cy + 3, "NEW BEST!" if new_best else "Best: %d" % save["best"], COL["magenta"] | curses.A_BOLD)
     center(stdscr, cy + 4, "Wallet: $%d" % wallet["money"], COL["green"] | curses.A_BOLD)
