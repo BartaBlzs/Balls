@@ -31,6 +31,14 @@ except ImportError:
 SAVE_PATH = os.path.join(os.path.expanduser("~"), ".pigeon_save.json")
 ROUND_SECS = 90
 MIN_W, MIN_H = 70, 20
+RETALIATION_SCORE = 500
+SHOTGUN_FIRE_MIN = 1.4
+SHOTGUN_FIRE_MAX = 2.4
+SHOTGUN_PELLETS = 2
+SHOTGUN_SPEED = 24.0
+SHOTGUN_LIFE = 2.0
+SHOTGUN_HIT_PENALTY = 60
+SHOTGUN_HIT_IFRAMES = 0.7
 
 # --------------------------------------------------------------------------- content
 
@@ -348,6 +356,7 @@ class Person:
         self.dir = random.choice((-1, 1)) if edge is None else edge
         self.x = -3.0 if self.dir > 0 else float(w)
         self.stun = 0.0
+        self.gun_cd = random.uniform(0.6, 1.4)
         self.shout = ""
         self.anim = random.random() * 10
 
@@ -380,10 +389,14 @@ def play(stdscr, save, audio):
     gl, bg, clouds = 0, [], []
     layout()
     people = [Person(w) for _ in range(max(4, w // 14))]
-    poops, particles, splats, floaters = [], [], [], []
+    poops, pellets, particles, splats, floaters = [], [], [], [], []
     px, py, vx, vy, face, flap = w / 2, 4.0, 0.0, 0.0, 1, 0.0
     ammo, cooldown, score, streak = MAX_AMMO, 0.0, 0, 0
     no_ammo_flash = 0.0
+    retaliation_on = False
+    retaliation_banner = 0.0
+    hurt_iframes = 0.0
+    hit_notice = 0.0
     start = last = time.perf_counter()
 
     while True:
@@ -430,6 +443,15 @@ def play(stdscr, save, audio):
         ammo = min(MAX_AMMO, ammo + REGEN * dt)
         cooldown = max(0.0, cooldown - dt)
         no_ammo_flash = max(0.0, no_ammo_flash - dt)
+        retaliation_banner = max(0.0, retaliation_banner - dt)
+        hurt_iframes = max(0.0, hurt_iframes - dt)
+        hit_notice = max(0.0, hit_notice - dt)
+
+        if (not retaliation_on) and score >= RETALIATION_SCORE:
+            retaliation_on = True
+            retaliation_banner = 3.0
+            for p in people:
+                p.gun_cd = min(p.gun_cd, random.uniform(0.2, 0.8))
 
         if want_drop and cooldown <= 0:
             s = SIZES[size_i]
@@ -447,6 +469,23 @@ def play(stdscr, save, audio):
                 p.stun -= dt
                 continue
             p.x += p.dir * p.speed * dt
+            if retaliation_on:
+                p.gun_cd -= dt
+                if p.gun_cd <= 0:
+                    ox, oy = p.x + 1.5, gl - 2.0
+                    tx, ty = px + 2.5, py + 1.0
+                    dx, dy = tx - ox, ty - oy
+                    n = math.hypot(dx, dy) or 1.0
+                    bx, by = dx / n, dy / n
+                    for _ in range(SHOTGUN_PELLETS):
+                        pellets.append(dict(
+                            x=ox,
+                            y=oy,
+                            vx=(bx + random.uniform(-0.2, 0.2)) * SHOTGUN_SPEED,
+                            vy=(by + random.uniform(-0.15, 0.15)) * SHOTGUN_SPEED,
+                            life=SHOTGUN_LIFE,
+                        ))
+                    p.gun_cd = random.uniform(SHOTGUN_FIRE_MIN, SHOTGUN_FIRE_MAX)
             if p.x > w + 1 or p.x < -4:
                 p.respawn(w, edge=-p.dir)
 
@@ -500,6 +539,22 @@ def play(stdscr, save, audio):
             c[0] += c[2] * dt
             if c[0] > w + 8:
                 c[0] = -8
+        for pel in pellets[:]:
+            pel["x"] += pel["vx"] * dt
+            pel["y"] += pel["vy"] * dt
+            pel["life"] -= dt
+            if (pel["life"] <= 0 or pel["x"] < -1 or pel["x"] > w + 1 or
+                    pel["y"] < 0 or pel["y"] > gl):
+                pellets.remove(pel)
+                continue
+            if hurt_iframes <= 0 and abs(pel["x"] - (px + 2.5)) <= 2.5 and abs(pel["y"] - (py + 0.8)) <= 1.8:
+                pellets.remove(pel)
+                hurt_iframes = SHOTGUN_HIT_IFRAMES
+                hit_notice = 1.2
+                streak = 0
+                score = max(0, score - SHOTGUN_HIT_PENALTY)
+                vx = min(24, max(-24, vx + pel["vx"] * 0.15))
+                vy = min(11, max(-11, vy + pel["vy"] * 0.08))
 
         # ---- draw
         stdscr.erase()
@@ -522,21 +577,30 @@ def play(stdscr, save, audio):
             put(stdscr, int(poop["y"]), int(poop["x"] - len(g) / 2), g, COL["yellow"] | curses.A_BOLD)
         for pt in particles:
             put(stdscr, int(pt[1]), int(pt[0]), pt[5], COL["yellow"])
+        for pel in pellets:
+            ch = "-" if abs(pel["vx"]) > abs(pel["vy"]) * 1.7 else ("\\" if pel["vx"] > 0 else "/")
+            put(stdscr, int(pel["y"]), int(pel["x"]), ch, COL["red"] | curses.A_BOLD)
         for f in floaters:
             put(stdscr, int(f[1]), int(f[0]), f[2], COL["yellow"] | curses.A_BOLD)
         frames = PIGEON_R if face > 0 else PIGEON_L
         put_sprite(stdscr, int(py), int(px), frames[int(flap) % 2], COL["white"] | curses.A_BOLD)
+        if hit_notice > 0:
+            put(stdscr, max(2, int(py) - 1), int(px) - 2, "-%d SHOTGUN!" % SHOTGUN_HIT_PENALTY, COL["red"] | curses.A_BOLD)
 
         mult = min(5, 1 + streak // 2)
         put(stdscr, 0, 1, "SCORE %05d" % score, COL["yellow"] | curses.A_BOLD)
         put(stdscr, 0, 16, "STREAK %d (x%d)" % (streak, mult), COL["magenta"] | curses.A_BOLD)
         put(stdscr, 0, w - 12, "TIME %3d" % math.ceil(left), COL["white"] | curses.A_BOLD)
+        if retaliation_on:
+            put(stdscr, 0, max(1, w // 2 - 10), "RETALIATION ACTIVE", COL["red"] | curses.A_BOLD)
+        if retaliation_banner > 0:
+            center(stdscr, 2, "PEOPLE FOUND SHOTGUNS - DODGE!", COL["red"] | curses.A_BOLD)
         bar = int(ammo / MAX_AMMO * 12)
         ammo_attr = COL["red"] | curses.A_BOLD if no_ammo_flash > 0 else COL["cyan"]
         put(stdscr, 1, 1, "AMMO [%s%s]" % ("#" * bar, "-" * (12 - bar)), ammo_attr)
         put(stdscr, 1, 21, "SIZE %s (cost %d)" % (SIZES[size_i]["name"], SIZES[size_i]["cost"]), COL["white"])
         put(stdscr, 1, 44, "SOUND %s" % SOUNDS[sound_i]["name"], COL["white"])
-        put(stdscr, h - 1, 1, "arrows/WASD fly   SPACE poop   1-4 size   M sound   Q menu", curses.A_DIM)
+        put(stdscr, h - 1, 1, "arrows/WASD fly   SPACE poop   1-4 size   M sound   dodge shotgun fire   Q menu", curses.A_DIM)
         stdscr.refresh()
 
         time.sleep(max(0.0, 1 / 30 - (time.perf_counter() - now)))
