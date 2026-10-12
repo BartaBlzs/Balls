@@ -2,7 +2,7 @@
 """
 PIGEON - an ASCII terminal game. You are a pigeon. People are walking below.
 You know what to do.
-
+ 
 Run:   python3 pigeon.py
 Needs: Python 3.8+ and curses (built in on Linux/macOS; Windows: pip install windows-curses)
 Sound: generated on the fly (no asset files). Uses afplay / paplay / aplay / pw-play /
