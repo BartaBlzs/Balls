@@ -47,6 +47,7 @@ ROCK_GRAVITY = 34.0
 ROCK_AIR_DRAG = 0.04
 ROCK_LIFE = 3.0
 ROCK_HIT_DAMAGE = 10
+ROCK_HIT_SCORE_LOSS = 10
 ROCK_HIT_IFRAMES = 0.7
 ROCK_SALVO_SIZE = 3
 ROCK_SALVO_COOLDOWN_MIN = 5.0
@@ -704,7 +705,7 @@ def play(stdscr, save, wallet, audio):
                 hit_notice = 1.2
                 streak = 0
                 player_hp = max(0, player_hp - ROCK_HIT_DAMAGE)
-                score = max(0, score - 1)
+                score = max(0, score - ROCK_HIT_SCORE_LOSS)
                 vx = min(24, max(-24, vx + rock["vx"] * 0.15))
                 vy = min(11, max(-11, vy + rock["vy"] * 0.08))
                 if player_hp <= 0:
@@ -742,7 +743,7 @@ def play(stdscr, save, wallet, audio):
         frames = PIGEON_R if face > 0 else PIGEON_L
         put_sprite(stdscr, int(py), int(px), frames[int(flap) % 2], COL["white"] | curses.A_BOLD)
         if hit_notice > 0:
-            put(stdscr, max(2, int(py) - 1), int(px) - 2, "-10 HP  -1 SCORE", COL["red"] | curses.A_BOLD)
+            put(stdscr, max(2, int(py) - 1), int(px) - 2, "-10 HP  -10 SCORE", COL["red"] | curses.A_BOLD)
 
         mult = min(5, 1 + streak // 2)
         put(stdscr, 0, 1, "SCORE %05d" % score, COL["yellow"] | curses.A_BOLD)
