@@ -906,7 +906,7 @@ def menu(stdscr, save, wallet, audio):
         top = max(1, h // 2 - 8)
         for i, line in enumerate(TITLE):
             center(stdscr, top + i, line, COL["white"] | curses.A_BOLD)
-        center(stdscr, top + len(TITLE) + 1, "poop on people. sell codes. profit.", curses.A_DIM)
+        center(stdscr, top + len(TITLE) + 1, "shit on people.", curses.A_DIM)
         for i, it in enumerate(items):
             text = ("> %s <" % it) if i == sel else it
             center(stdscr, top + 8 + i * 2, text, (COL["yellow"] | curses.A_BOLD) if i == sel else 0)
