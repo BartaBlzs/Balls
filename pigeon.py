@@ -1,16 +1,3 @@
-#!/usr/bin/env python3
-"""
-PIGEON - an ASCII terminal game. You are a pigeon. People are walking below.
-You know what to do.
- 
-Run:   python3 pigeon.py
-Needs: Python 3.8+ and curses (built in on Linux/macOS; Windows: pip install windows-curses)
-Sound: MP3 files in the audio folder. Uses ffplay / afplay / paplay / aplay /
-       pw-play / play if found, Windows Media Player on Windows, otherwise the
-       terminal bell.
-
-Adding codes:  python3 pigeon.py --hash MY-NEW-CODE   -> paste the hash into CODES below.
-"""
 import hashlib
 import json
 import math
@@ -33,24 +20,24 @@ ROUND_SECS = 90
 MIN_W, MIN_H = 70, 20
 PLAYER_HP_MAX = 100
 DIFFICULTY_STEP = 40
-PEOPLE_PER_DIFFICULTY = 2
+PEOPLE_PER_DIFFICULTY = 3
 MAX_PEOPLE = 10
 POST_SCORE_DIFFICULTY = 150
-POST_SCORE_SPEED_STEP = 0.35
-POST_SCORE_ROCK_RATE_STEP = 0.28
-TARGETED_ROCK_SCORE = 200
+POST_SCORE_SPEED_STEP = 0.59
+POST_SCORE_ROCK_RATE_STEP = 0.35
+TARGETED_ROCK_SCORE = 150
 TARGETED_ROCK_NOISE = 0.15
 ROCK_THROW_MIN = 4.5
-ROCK_THROW_MAX = 7.0
-ROCK_SPEED = 16.0
-ROCK_GRAVITY = 34.0
+ROCK_THROW_MAX = 10.0
+ROCK_SPEED = 20.0
+ROCK_GRAVITY = 40.0
 ROCK_AIR_DRAG = 0.04
 ROCK_LIFE = 3.0
 ROCK_HIT_DAMAGE = 10
 ROCK_HIT_IFRAMES = 0.7
 ROCK_SALVO_SIZE = 3
-ROCK_SALVO_COOLDOWN_MIN = 5.0
-ROCK_SALVO_COOLDOWN_MAX = 8.0
+ROCK_SALVO_COOLDOWN_MIN = .0
+ROCK_SALVO_COOLDOWN_MAX = 4.0
 POOP_GRAVITY = 52.0
 POOP_MAX_SPEED = 42.0
 POOP_AIR_DRAG = 0.08
@@ -78,7 +65,7 @@ POOP_MODES = [
     dict(key="triple", name="Triple", count=3, cost=75, sound="squelch"),
     dict(key="shower", name="Shower", count=5, cost=120, sound="bomb"),
 ]
-FREE = {"size:small", "sound:plop"}
+FREE = {"size:small", "sound:poop"}
 CODE_REDEEM_COST = 10
 FREE = {"size:small", "sound:poop"}
 
