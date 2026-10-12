@@ -405,7 +405,7 @@ def play(stdscr, save, wallet, audio):
     if w < MIN_W or h < MIN_H:
         return None
     size_i, sound_i = size_index(save), sound_index(save)
-    G, MAX_AMMO, POOP_COOLDOWN, RELOAD_COOLDOWN = 35.0, 14, 0.28, 1.5
+    G, MAX_AMMO, POOP_COOLDOWN, RELOAD_COOLDOWN = 35.0, 5, 0.28, 2.0
 
     def layout():
         nonlocal h, w, gl, bg, clouds
@@ -597,7 +597,7 @@ def play(stdscr, save, wallet, audio):
                     pel["y"] < 0 or pel["y"] > gl):
                 pellets.remove(pel)
                 continue
-            if hurt_iframes <= 0 and abs(pel["x"] - (px + 2.5)) <= 2.5 and abs(pel["y"] - (py + 0.8)) <= 1.8:
+            if (not reloading) and hurt_iframes <= 0 and abs(pel["x"] - (px + 2.5)) <= 2.5 and abs(pel["y"] - (py + 0.8)) <= 1.8:
                 pellets.remove(pel)
                 hurt_iframes = SHOTGUN_HIT_IFRAMES
                 hit_notice = 1.2
