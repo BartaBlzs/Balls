@@ -5,8 +5,9 @@ You know what to do.
 
 Run:   python3 pigeon.py
 Needs: Python 3.8+ and curses (built in on Linux/macOS; Windows: pip install windows-curses)
-Sound: generated on the fly (no asset files). Uses afplay / paplay / aplay / pw-play /
-       ffplay / play if found, winsound on Windows, otherwise the terminal bell.
+Sound: MP3 files in the audio folder. Uses ffplay / afplay / paplay / aplay /
+       pw-play / play if found, Windows Media Player on Windows, otherwise the
+       terminal bell.
 
 Adding codes:  python3 pigeon.py --hash MY-NEW-CODE   -> paste the hash into CODES below.
 """
@@ -16,12 +17,9 @@ import math
 import os
 import random
 import shutil
-import struct
 import subprocess
 import sys
-import tempfile
 import time
-import wave
 
 try:
     import curses
@@ -53,13 +51,13 @@ SIZES = [
     dict(key="mega",   name="MEGA",   glyph="(@@@)",  splat="~~(@@@)~~",  cost=8, pts=150, hw=3),
 ]
 SOUNDS = [
-    dict(key="plop",    name="Plop"),
+    dict(key="poop",    name="Poop"),
     dict(key="splat",   name="Splat"),
     dict(key="squelch", name="Squelch"),
     dict(key="boing",   name="Boing"),
     dict(key="bomb",    name="Bomb"),
 ]
-FREE = {"size:small", "sound:plop"}
+FREE = {"size:small", "sound:poop"}
 
 # sha256 of the code (upper-cased, no spaces) -> what it unlocks.
 CODES = {
@@ -89,12 +87,16 @@ def code_hash(raw):
 
 
 def load_save():
-    data = {"unlocked": [], "size": "small", "sound": "plop", "best": 0}
+    data = {"unlocked": [], "size": "small", "sound": "poop", "best": 0}
     try:
         with open(SAVE_PATH) as f:
             data.update(json.load(f))
     except (OSError, ValueError):
         pass
+    if data["sound"] == "plop":
+        data["sound"] = "poop"
+        data["unlocked"] = ["sound:poop" if item == "sound:plop" else item
+                            for item in data["unlocked"]]
     data["unlocked"] = sorted(set(data["unlocked"]) | FREE)
     return data
 
@@ -171,109 +173,82 @@ def sound_index(save):
 
 # --------------------------------------------------------------------------- audio
 
-SR = 22050
-PITCH = [1.35, 1.0, 0.72, 0.5]    # bigger poop = lower pitch
-LENGTH = [1.0, 1.2, 1.5, 2.0]     # ...and longer sound
-
-
-def synth(pack, size_i):
-    k, L = PITCH[size_i], LENGTH[size_i]
-    rnd = random.Random(size_i * 31 + 7)
-    out = []
-    if pack == "plop":
-        n = int(SR * 0.18 * L)
-        ph = 0.0
-        for i in range(n):
-            t = i / n
-            ph += 2 * math.pi * (700 - 550 * t) * k / SR
-            out.append(math.sin(ph) * (1 - t) ** 2)
-    elif pack == "splat":
-        n = int(SR * 0.28 * L)
-        lp = ph = 0.0
-        for i in range(n):
-            t = i / n
-            lp += (rnd.uniform(-1, 1) - lp) * 0.3 * k
-            ph += 2 * math.pi * 110 * k / SR
-            out.append(lp * 3.0 * (1 - t) ** 1.5 + 0.8 * math.sin(ph) * (1 - t) ** 3)
-    elif pack == "squelch":
-        n = int(SR * 0.35 * L)
-        ph = 0.0
-        for i in range(n):
-            t = i / n
-            ph += 2 * math.pi * (420 - 260 * t) * k / SR
-            wob = 4 * math.sin(2 * math.pi * 35 * i / SR)
-            out.append(math.sin(ph + wob) * (1 - t))
-    elif pack == "boing":
-        n = int(SR * 0.4 * L)
-        ph = 0.0
-        for i in range(n):
-            t = i / n
-            f = (250 + 300 * t) * k + 40 * math.sin(2 * math.pi * 14 * i / SR)
-            ph += 2 * math.pi * f / SR
-            out.append(math.sin(ph) * (1 - t) ** 1.2)
-    else:  # bomb
-        n = int(SR * 0.7 * L)
-        lp = ph = 0.0
-        for i in range(n):
-            t = i / n
-            lp += (rnd.uniform(-1, 1) - lp) * 0.05
-            ph += 2 * math.pi * (140 - 100 * t) * k / SR
-            out.append((lp * 6.0 + math.sin(ph)) * (1 - t) ** 2)
-    peak = max(0.001, max(abs(s) for s in out))
-    return [max(-1.0, min(1.0, s / peak * 0.8)) for s in out]
-
-
-def write_wav(path, samples):
-    with wave.open(path, "wb") as wf:
-        wf.setnchannels(1)
-        wf.setsampwidth(2)
-        wf.setframerate(SR)
-        wf.writeframes(b"".join(struct.pack("<h", int(s * 32767)) for s in samples))
-
+VOLUME = 0.3
+MAX_SIMULTANEOUS_SOUNDS = 16
 
 class Audio:
     def __init__(self):
-        self.dir = tempfile.mkdtemp(prefix="pigeon_")
-        self.cache = {}
+        self.dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "audio")
         self.procs = []
         self.cmd = self._find_player()
 
     @staticmethod
     def _find_player():
+        players = [["ffplay", "-nodisp", "-autoexit", "-loglevel", "quiet"],
+                   ["afplay"], ["paplay"], ["pw-play"], ["aplay", "-q"],
+                   ["play", "-q"]]
         if sys.platform.startswith("win"):
-            return "winsound"
-        for cmd in (["afplay"], ["paplay"], ["pw-play"], ["aplay", "-q"],
-                    ["ffplay", "-nodisp", "-autoexit", "-loglevel", "quiet"], ["play", "-q"]):
+            players.append([
+                "powershell.exe", "-NoProfile", "-STA", "-WindowStyle", "Hidden", "-Command",
+                ""
+            ])
+        for cmd in players:
             if shutil.which(cmd[0]):
                 return cmd
         return None
-
-    def _path(self, pack, size_i):
-        key = (pack, size_i)
-        if key not in self.cache:
-            p = os.path.join(self.dir, "%s_%d.wav" % key)
-            write_wav(p, synth(pack, size_i))
-            self.cache[key] = p
-        return self.cache[key]
 
     def play(self, pack_i, size_i):
         pack = SOUNDS[pack_i]["key"]
         if self.cmd is None:
             curses.beep()
             return
-        path = self._path(pack, size_i)
-        if self.cmd == "winsound":
-            import winsound
-            winsound.PlaySound(path, winsound.SND_FILENAME | winsound.SND_ASYNC)
+        path = os.path.join(self.dir, pack + ".mp3")
+        if not os.path.isfile(path):
+            curses.beep()
             return
         self.procs = [p for p in self.procs if p.poll() is None]   # reap finished players
-        if len(self.procs) >= 6:
+        if len(self.procs) >= MAX_SIMULTANEOUS_SOUNDS:
             return
         try:
-            self.procs.append(subprocess.Popen(self.cmd + [path], stdout=subprocess.DEVNULL,
+            self.procs.append(subprocess.Popen(self._play_command(path), stdout=subprocess.DEVNULL,
                                                stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL))
         except OSError:
             self.cmd = None
+
+    def _play_command(self, path):
+        player = os.path.basename(self.cmd[0]).lower()
+        volume = max(0.0, min(1.0, VOLUME))
+        if player == "ffplay":
+            return self.cmd + ["-volume", str(int(volume * 100)), path]
+        if player == "afplay":
+            return self.cmd + ["-v", str(volume), path]
+        if player == "paplay":
+            return self.cmd + ["--volume", str(int(volume * 65536)), path]
+        if player == "pw-play":
+            return self.cmd + ["--volume", str(volume), path]
+        if player == "aplay":
+            return self.cmd + [path]
+        if player == "play":
+            return self.cmd + ["-v", str(volume), path]
+        if player == "powershell.exe":
+            safe_path = path.replace("'", "''")
+            script = (
+                "$done = New-Object Threading.ManualResetEvent($false); "
+                "Add-Type -AssemblyName PresentationCore; "
+                "$player = New-Object System.Windows.Media.MediaPlayer; "
+                "$player.Volume = " + str(volume) + "; "
+                "$dispatcher = [System.Windows.Threading.Dispatcher]::CurrentDispatcher; "
+                "$timer = New-Object System.Windows.Threading.DispatcherTimer; "
+                "$timer.Interval = [TimeSpan]::FromSeconds(10); "
+                "$timer.Add_Tick({ $player.Close(); $dispatcher.InvokeShutdown() }); "
+                "$player.add_MediaOpened({ $player.Play(); $timer.Start() }); "
+                "$player.add_MediaEnded({ $player.Close(); $dispatcher.InvokeShutdown() }); "
+                "$player.add_MediaFailed({ $dispatcher.InvokeShutdown() }); "
+                "$player.Open([Uri]'" + safe_path + "'); "
+                "[System.Windows.Threading.Dispatcher]::Run()"
+            )
+            return self.cmd[:-1] + [script]
+        return self.cmd + [path, str(volume)]
 
     def cleanup(self):
         for p in self.procs:
@@ -281,7 +256,6 @@ class Audio:
                 p.terminate()
             except OSError:
                 pass
-        shutil.rmtree(self.dir, ignore_errors=True)
 
 # --------------------------------------------------------------------------- drawing helpers
 
@@ -496,6 +470,7 @@ def play(stdscr, save, wallet, audio):
                 ammo -= s["cost"]
                 cooldown = POOP_COOLDOWN
                 poops.append(dict(x=px + (2.5 if face > 0 else 3.5), y=py + 2.0, vy=2.0, size=size_i))
+                audio.play(sound_i, size_i)
                 if ammo <= 0:
                     reloading = True
                     cooldown = RELOAD_COOLDOWN
@@ -543,7 +518,6 @@ def play(stdscr, save, wallet, audio):
                     break
             if hit or poop["y"] >= gl - 1:
                 poops.remove(poop)
-                audio.play(sound_i, poop["size"])
                 for _ in range(4 + 3 * poop["size"]):
                     particles.append([poop["x"], min(poop["y"], gl - 2), random.uniform(-12, 12),
                                       random.uniform(-14, -3), 0.5, random.choice(".,*'`")])
