@@ -16,28 +16,25 @@ except ImportError:
 SAVE_PATH = os.path.join(os.path.expanduser("~"), ".pigeon_save.json")
 WALLET_PATH = os.path.join(os.path.expanduser("~"), ".pigeon_wallet.json")
 WALLET_SALT = "PIGEON_WALLET_V1"
-ROUND_SECS = 90
+ROUND_SECS = 120
 MIN_W, MIN_H = 70, 20
 PLAYER_HP_MAX = 100
-DIFFICULTY_STEP = 40
 PEOPLE_PER_DIFFICULTY = 3
 MAX_PEOPLE = 10
-POST_SCORE_DIFFICULTY = 150
-POST_SCORE_SPEED_STEP = 0.59
-POST_SCORE_ROCK_RATE_STEP = 0.35
-TARGETED_ROCK_SCORE = 150
+POST_SCORE_SPEED_STEP = 0.55
+POST_SCORE_ROCK_RATE_STEP = 0.25
 TARGETED_ROCK_NOISE = 0.15
-ROCK_THROW_MIN = 4.5
-ROCK_THROW_MAX = 10.0
+ROCK_THROW_RANGES = ((3.0, 7.0), (2.5, 6.0), (2.0, 5.0), (1.0, 3.0))
 ROCK_SPEED = 20.0
 ROCK_GRAVITY = 40.0
 ROCK_AIR_DRAG = 0.04
 ROCK_LIFE = 3.0
 ROCK_HIT_DAMAGE = 10
 ROCK_HIT_IFRAMES = 0.7
-ROCK_SALVO_SIZE = 3
-ROCK_SALVO_COOLDOWN_MIN = .0
-ROCK_SALVO_COOLDOWN_MAX = 4.0
+ROCK_SALVO_SIZES = (3, 6, 9, 16)
+POOP_HIT_LOCKOUT = 1.0
+ROCK_SALVO_COOLDOWN_MIN = 1.0
+ROCK_SALVO_COOLDOWN_MAX = 3.0
 POOP_GRAVITY = 52.0
 POOP_MAX_SPEED = 42.0
 POOP_AIR_DRAG = 0.08
@@ -356,6 +353,16 @@ def segment_hits_rect(x0, y0, x1, y1, left, top, right, bottom):
     return True
 
 
+def score_difficulty(score):
+    if score > 250:
+        return "U ARE FUCKED", 3
+    if score >= 150:
+        return "HARDCORE", 2
+    if score >= 50:
+        return "MEDIUM", 1
+    return "EASY", 0
+
+
 def make_skyline(w, h, gl):
     grid = [[" "] * w for _ in range(h)]
     rng = random.Random(7)
@@ -423,7 +430,7 @@ def play(stdscr, save, wallet, audio):
     h, w = stdscr.getmaxyx()
     if w < MIN_W or h < MIN_H:
         return None
-    size_i, sound_i = size_index(save), sound_index(save)
+    size_i = size_index(save)
     mode = next(m for m in POOP_MODES if m["key"] == save["poop_mode"])
     MAX_AMMO, POOP_COOLDOWN, RELOAD_COOLDOWN = 5, 0.28, 2.0
 
@@ -440,9 +447,9 @@ def play(stdscr, save, wallet, audio):
     people = [Person(w) for _ in range(max(4, w // 14))]
     poops, rocks, particles, splats, floaters = [], [], [], [], []
     px, py, vx, vy, face, flap = w / 2, 4.0, 0.0, 0.0, 1, 0.0
-    ammo, cooldown, score, streak = MAX_AMMO, 0.0, 0, 0
+    ammo, cooldown, score = MAX_AMMO, 0.0, 0
+    poop_lockout = 0.0
     player_hp = PLAYER_HP_MAX
-    difficulty_tier = 0
     no_ammo_flash = 0.0
     reloading = False
     retaliation_banner = 0.0
@@ -451,6 +458,8 @@ def play(stdscr, save, wallet, audio):
     reward_flash = 0.0
     reward_tier = 0
     rock_salvo_remaining = 0
+    rock_throw_queue = []
+    rock_salvo_thrower = None
     rock_salvo_cooldown = 0.0
     rock_salvo_pending = False
     next_rock_throw = 0.0
@@ -483,12 +492,6 @@ def play(stdscr, save, wallet, audio):
                 vy = min(11, vy + 8)
             elif k == ord(" "):
                 want_drop = True
-            elif ord("1") <= k <= ord("4"):
-                if k - ord("1") in owned_sizes(save):
-                    size_i = k - ord("1")
-            elif k in (ord("m"), ord("M")):
-                o = owned_sounds(save)
-                sound_i = o[(o.index(sound_i) + 1) % len(o)]
             elif k in (ord("q"), ord("Q"), 27):
                 return score
 
@@ -499,6 +502,7 @@ def play(stdscr, save, wallet, audio):
         py = min(max(3, py + vy * dt), gl - 8)
         flap += dt * (8 + abs(vx) * 0.3)
         cooldown = max(0.0, cooldown - dt)
+        poop_lockout = max(0.0, poop_lockout - dt)
         no_ammo_flash = max(0.0, no_ammo_flash - dt)
         retaliation_banner = max(0.0, retaliation_banner - dt)
         hurt_iframes = max(0.0, hurt_iframes - dt)
@@ -506,7 +510,7 @@ def play(stdscr, save, wallet, audio):
         reward_flash = max(0.0, reward_flash - dt)
         rock_salvo_cooldown = max(0.0, rock_salvo_cooldown - dt)
         next_rock_throw = max(0.0, next_rock_throw - dt)
-        difficulty_tier = max(difficulty_tier, score // DIFFICULTY_STEP)
+        difficulty_name, difficulty_tier = score_difficulty(score)
         base_people = max(4, w // 14)
         target_people = min(
             MAX_PEOPLE,
@@ -518,7 +522,7 @@ def play(stdscr, save, wallet, audio):
             ammo = MAX_AMMO
             reloading = False
 
-        if want_drop and cooldown <= 0 and not reloading:
+        if want_drop and cooldown <= 0 and poop_lockout <= 0 and not reloading:
             s = SIZES[size_i]
             mode = next(m for m in POOP_MODES if m["key"] == save["poop_mode"])
             ammo_cost = s["cost"] * mode["count"]
@@ -556,9 +560,7 @@ def play(stdscr, save, wallet, audio):
                 p.stun -= dt
                 continue
             speed_multiplier = 1.0
-            if score >= POST_SCORE_DIFFICULTY:
-                post_score_tier = 1 + (score - POST_SCORE_DIFFICULTY) // DIFFICULTY_STEP
-                speed_multiplier += post_score_tier * POST_SCORE_SPEED_STEP
+            speed_multiplier += max(0, difficulty_tier - 1) * POST_SCORE_SPEED_STEP
             p.x += p.dir * p.speed * speed_multiplier * dt
             if p.x > w + 1 or p.x < -4:
                 p.respawn(w, edge=-p.dir)
@@ -592,9 +594,7 @@ def play(stdscr, save, wallet, audio):
                     particles.append([poop["x"], min(poop["y"], gl - 2), random.uniform(-12, 12),
                                       random.uniform(-14, -3), 0.5, random.choice(".,*'`")])
                 if hit:
-                    streak += 1
-                    mult = min(5, 1 + streak // 2)
-                    gained = s["pts"] * mult * Person.KINDS[hit.kind]["mult"]
+                    gained = s["pts"] * Person.KINDS[hit.kind]["mult"]
                     score += gained
                     new_tier = score // 30
                     if new_tier > reward_tier:
@@ -607,54 +607,56 @@ def play(stdscr, save, wallet, audio):
                     floaters.append([hit.x + 1, gl - 5.0, "+%d" % gained, 1.0])
                     hit.shout = random.choice(VIP_SHOUTS if hit.kind == "vip" else SHOUTS)
                     hit.throws_rocks = True
+                    rock_throw_queue.append(hit)
                     rock_salvo_pending = True
                     retaliation_banner = 3.0
-                    hit.dead = PERSON_DEATH_TIME
-                    hit.stun = 0.0
+                    hit.stun = PERSON_DEATH_TIME
                 else:
-                    streak = 0
                     splats.append([poop["x"], s["splat"], 4.0])
 
         if rock_salvo_pending and rock_salvo_remaining == 0 and rock_salvo_cooldown <= 0:
-            rock_salvo_remaining = ROCK_SALVO_SIZE
-            rock_salvo_pending = False
-            next_rock_throw = random.uniform(1.0, 2.0)
-        if rock_salvo_remaining > 0 and next_rock_throw <= 0:
-            throwers = [p for p in people if p.throws_rocks and p.dead <= 0]
-            if throwers:
-                thrower = random.choice(throwers)
-                ox, oy = thrower.x + 1.5, gl - 2.0
-                difficulty = 1.0 + difficulty_tier * 0.12
-                rock_speed = ROCK_SPEED + difficulty_tier * 1.5
-                target_lead = 0.45
-                aim_noise = 0.8
-                if score >= TARGETED_ROCK_SCORE:
-                    post_score_tier = 1 + (score - TARGETED_ROCK_SCORE) // DIFFICULTY_STEP
-                    target_lead = 0.65 + post_score_tier * 0.05
-                    aim_noise = max(TARGETED_ROCK_NOISE, 0.8 / (post_score_tier + 2))
-                tx = px + 2.5 + vx * target_lead
-                ty = py + 1.0 + vy * target_lead
-                dx, dy = tx - ox, ty - oy
-                distance = math.hypot(dx, dy) or 1.0
-                flight_time = min(1.5, max(0.65, distance / rock_speed))
-                rocks.append(dict(
-                    x=ox,
-                    y=oy,
-                    vx=dx / flight_time + random.uniform(-aim_noise, aim_noise),
-                    vy=dy / flight_time - 0.5 * ROCK_GRAVITY * flight_time + random.uniform(-aim_noise, aim_noise),
-                    life=ROCK_LIFE,
-                ))
-                audio.play(4, 0)
-                rock_salvo_remaining -= 1
-                rock_rate = 1.0
-                if score >= POST_SCORE_DIFFICULTY:
-                    post_score_tier = 1 + (score - POST_SCORE_DIFFICULTY) // DIFFICULTY_STEP
-                    rock_rate += post_score_tier * POST_SCORE_ROCK_RATE_STEP
-                next_rock_throw = random.uniform(ROCK_THROW_MIN, ROCK_THROW_MAX) / (difficulty * rock_rate)
-                if rock_salvo_remaining == 0:
-                    rock_salvo_cooldown = random.uniform(
-                        ROCK_SALVO_COOLDOWN_MIN, ROCK_SALVO_COOLDOWN_MAX
-                    ) / rock_rate
+            if rock_throw_queue:
+                thrower = rock_throw_queue[0]
+                if thrower in people and thrower.dead <= 0 and thrower.stun <= 0:
+                    rock_throw_queue.pop(0)
+                    rock_salvo_thrower = thrower
+                    rock_salvo_remaining = ROCK_SALVO_SIZES[difficulty_tier]
+                    rock_salvo_pending = False
+                    next_rock_throw = random.uniform(1.0, 2.0)
+        if rock_salvo_thrower is not None and rock_salvo_remaining > 0 and next_rock_throw <= 0:
+            thrower = rock_salvo_thrower
+            ox, oy = thrower.x + 1.5, gl - 2.0
+            difficulty = 1.0 + difficulty_tier * 0.18
+            rock_speed = ROCK_SPEED + difficulty_tier * 2.0
+            target_lead = 0.45
+            aim_noise = 0.8
+            if difficulty_tier >= 2:
+                target_lead = 0.65 + (difficulty_tier - 2) * 0.05
+                aim_noise = max(TARGETED_ROCK_NOISE, 0.8 / (difficulty_tier + 1))
+            tx = px + 2.5 + vx * target_lead
+            ty = py + 1.0 + vy * target_lead
+            dx, dy = tx - ox, ty - oy
+            distance = math.hypot(dx, dy) or 1.0
+            flight_time = min(1.5, max(0.65, distance / rock_speed))
+            rocks.append(dict(
+                x=ox,
+                y=oy,
+                vx=dx / flight_time + random.uniform(-aim_noise, aim_noise),
+                vy=dy / flight_time - 0.5 * ROCK_GRAVITY * flight_time + random.uniform(-aim_noise, aim_noise),
+                life=ROCK_LIFE,
+            ))
+            audio.play(4, 0)
+            rock_salvo_remaining -= 1
+            rock_rate = 1.0
+            rock_rate += difficulty_tier * POST_SCORE_ROCK_RATE_STEP
+            throw_min, throw_max = ROCK_THROW_RANGES[difficulty_tier]
+            next_rock_throw = random.uniform(throw_min, throw_max) / (difficulty * rock_rate)
+            if rock_salvo_remaining == 0:
+                rock_salvo_thrower = None
+                rock_salvo_pending = bool(rock_throw_queue)
+                rock_salvo_cooldown = random.uniform(
+                    ROCK_SALVO_COOLDOWN_MIN, ROCK_SALVO_COOLDOWN_MAX
+                ) / rock_rate
 
         for pt in particles[:]:
             pt[2] *= 0.98
@@ -694,10 +696,10 @@ def play(stdscr, save, wallet, audio):
                         px - 0.5, py - 0.5, px + 5.5, py + 2.5)):
                 rocks.remove(rock)
                 hurt_iframes = ROCK_HIT_IFRAMES
+                poop_lockout = POOP_HIT_LOCKOUT
                 hit_notice = 1.2
-                streak = 0
                 player_hp = max(0, player_hp - ROCK_HIT_DAMAGE)
-                score = max(0, score - 1)
+                score = max(0, score - 10)
                 vx = min(24, max(-24, vx + rock["vx"] * 0.15))
                 vy = min(11, max(-11, vy + rock["vy"] * 0.08))
                 if player_hp <= 0:
@@ -735,14 +737,12 @@ def play(stdscr, save, wallet, audio):
         frames = PIGEON_R if face > 0 else PIGEON_L
         put_sprite(stdscr, int(py), int(px), frames[int(flap) % 2], COL["white"] | curses.A_BOLD)
         if hit_notice > 0:
-            put(stdscr, max(2, int(py) - 1), int(px) - 2, "-10 HP  -1 SCORE", COL["red"] | curses.A_BOLD)
+            put(stdscr, max(2, int(py) - 1), int(px) - 2, "-10 HP  -10 SCORE", COL["red"] | curses.A_BOLD)
 
-        mult = min(5, 1 + streak // 2)
         put(stdscr, 0, 1, "SCORE %05d" % score, COL["yellow"] | curses.A_BOLD)
-        put(stdscr, 0, 16, "STREAK %d (x%d)" % (streak, mult), COL["magenta"] | curses.A_BOLD)
+        put(stdscr, 0, 16, difficulty_name, COL["magenta"] | curses.A_BOLD)
         hp_attr = (COL["red"] | curses.A_BOLD) if player_hp <= ROCK_HIT_DAMAGE else (COL["green"] | curses.A_BOLD)
         put(stdscr, 0, max(1, w // 2 - 5), "HP %03d" % player_hp, hp_attr)
-        put(stdscr, 0, max(1, w // 2 + 6), "LV %d" % (difficulty_tier + 1), COL["red"] | curses.A_BOLD)
         put(stdscr, 0, max(30, w - 26), "MONEY $%d" % wallet["money"], COL["green"] | curses.A_BOLD)
         put(stdscr, 0, w - 12, "TIME %3d" % math.ceil(left), COL["white"] | curses.A_BOLD)
         if retaliation_banner > 0:
@@ -756,9 +756,8 @@ def play(stdscr, save, wallet, audio):
         cd_text = "RELOAD %.1fs" % cooldown if reloading else ("CD %.1fs" % cooldown if cooldown > 0 else "CD READY")
         put(stdscr, 1, 24, cd_text, cd_attr)
         mode_cost = SIZES[size_i]["cost"] * mode["count"]
-        put(stdscr, 1, 38, "SIZE %s %s (cost %d)" % (SIZES[size_i]["name"], mode["name"], mode_cost), COL["white"])
-        put(stdscr, 1, 62, "SOUND %s" % SOUNDS[sound_i]["name"], COL["white"])
-        put(stdscr, h - 1, 1, "arrows/WASD fly   SPACE poop   1-4 size   M sound   dodge thrown rocks   Q menu", curses.A_DIM)
+        put(stdscr, 1, 38, "%s (cost %d)" % (mode["name"], mode_cost), COL["white"])
+        put(stdscr, h - 1, 1, "arrows/WASD fly   SPACE poop   Q menu", curses.A_DIM)
         stdscr.refresh()
 
         time.sleep(max(0.0, 1 / 30 - (time.perf_counter() - now)))
