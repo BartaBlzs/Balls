@@ -248,6 +248,10 @@ class Audio:
         except OSError:
             self.cmd = None
 
+    def play_pack(self, pack, size_i):
+        pack_i = next(i for i, sound in enumerate(SOUNDS) if sound["key"] == pack)
+        self.play(pack_i, size_i)
+
     def _play_command(self, path):
         player = os.path.basename(self.cmd[0]).lower()
         volume = max(0.0, min(1.0, VOLUME))
@@ -543,11 +547,13 @@ def play(stdscr, save, wallet, audio):
                         size=size_i,
                     ))
                 audio.play_pack(mode["sound"], size_i)
-                if ammo <= 0:
+                if ammo < ammo_cost:
                     reloading = True
                     cooldown = RELOAD_COOLDOWN
             else:
                 no_ammo_flash = 0.6
+                reloading = True
+                cooldown = RELOAD_COOLDOWN
         elif want_drop and reloading:
             no_ammo_flash = 0.6
 
