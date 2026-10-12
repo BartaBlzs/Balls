@@ -75,7 +75,6 @@ SIZE_PRICES = {"small": 1200, "medium": 2200, "large": 3500, "mega": 6000}
 SOUND_PRICES = {"poop": 1200, "splat": 1800, "squelch": 2600, "boing": 3400, "bomb": 5000}
 FREE = {"size:small", "sound:poop"}
 CODE_REDEEM_COST = 1000
-FREE = {"size:small", "sound:poop"}
 
 # sha256 of the code (upper-cased, no spaces) -> what it unlocks.
 CODES = {
@@ -504,10 +503,8 @@ def play(stdscr, save, wallet, audio):
     size_i = size_index(save)
     mode = next(m for m in POOP_MODES if m["key"] == save["poop_mode"])
     POOP_COOLDOWN, RELOAD_COOLDOWN = 0.28, 2.0
-    # The magazine must always hold at least one complete shot for the chosen
-    # size + burst mode (e.g. MEGA + Shower costs 8 * 5 ammo).
-    initial_mode = next(m for m in POOP_MODES if m["key"] == save["poop_mode"])
-    MAX_AMMO = max(5, SIZES[size_i]["cost"] * initial_mode["count"])
+    # Give the player enough ammo for one full selected burst.
+    MAX_AMMO = max(5, SIZES[size_i]["cost"] * mode["count"])
 
     def layout():
         nonlocal h, w, gl, bg, clouds
@@ -534,8 +531,7 @@ def play(stdscr, save, wallet, audio):
             person.x = min(w - 3.0, max(0.0, w / 2 + (offset - (group_size - 1) / 2) * 3.0))
         index += group_size
     poops, rocks, particles, splats, floaters = [], [], [], [], []
-    # Spawn the pigeon in the center of the playable area at the start of
-    # every round, accounting for the sprite's six-column width.
+    # Start each round over the middle of the skyline.
     px = max(0.0, (w - 6) / 2)
     py = (3.0 + (gl - 8.0)) / 2
     vx, vy, face, flap = 0.0, 0.0, 1, 0.0
@@ -550,9 +546,7 @@ def play(stdscr, save, wallet, audio):
     reward_flash = 0.0
     announcement = ""
     announcement_time = 0.0
-    # Burst modes increase the pressure immediately: Single keeps the
-    # original difficulty, while Double/Triple/Shower start one/two/three
-    # difficulty tiers higher.  The existing hardest tier remains the cap.
+    # Larger bursts bring the rock pressure in earlier.
     mode_hardness = mode["count"]
     last_level = min(3, score_difficulty(score)[1] + mode_hardness - 1)
     near_people = False
@@ -688,8 +682,7 @@ def play(stdscr, save, wallet, audio):
         near_people = close_now
 
         # ---- poops
-        # Count unique direct projectile victims for hit-combo announcements.
-        # Only people whose body is crossed by the poop can score.
+        # A burst only counts people the poop actually crosses.
         direct_hits_this_moment = 0
         direct_hit_people = set()
         for poop in poops[:]:
@@ -719,15 +712,11 @@ def play(stdscr, save, wallet, audio):
                     particles.append([poop["x"], min(poop["y"], gl - 2), random.uniform(-12, 12),
                                       random.uniform(-14, -3), 0.5, random.choice(".,*'`")])
                 if hit:
-                    # A burst can contain several projectiles.  Do not let
-                    # more than one projectile (or a future collision pass)
-                    # count the same person more than once for a combo.
+                    # One person cannot pad the same combo twice in one frame.
                     if id(hit) not in direct_hit_people:
                         direct_hit_people.add(id(hit))
                         direct_hits_this_moment += 1
-                    # A collision affects only the person whose hitbox the
-                    # projectile crossed.  Being in the same group is not a
-                    # hit and must not award points or trigger retaliation.
+                    # Group membership does not turn a miss into a hit.
                     victims = (hit,)
                     for victim in victims:
                         distance = min(abs((victim.x + 1.5) - (px + 2.5)),
@@ -840,10 +829,7 @@ def play(stdscr, save, wallet, audio):
                     rock["y"] < 0 or rock["y"] > gl):
                 rocks.remove(rock)
                 continue
-            # The closer the bird is to the ground, the more exposed it is.
-            # Increase the rock collision zone gradually over the lowest part
-            # of the flight area instead of making low altitude an instant
-            # death line.
+            # Flying low makes the pigeon easier to hit.
             low_altitude = max(0.0, min(1.0, (py - (gl - 8 - LOW_ALTITUDE_BAND)) / LOW_ALTITUDE_BAND))
             hitbox_x = LOW_ALTITUDE_HITBOX_X * low_altitude
             hitbox_y = LOW_ALTITUDE_HITBOX_Y * low_altitude
@@ -888,9 +874,7 @@ def play(stdscr, save, wallet, audio):
             put(stdscr, int(poop["y"]), int(poop["x"] - len(g) / 2), g, COL["yellow"] | curses.A_BOLD)
         for pt in particles:
             put(stdscr, int(pt[1]), int(pt[0]), pt[5], COL["yellow"])
-        # Draw a short projected path for each incoming rock.  The preview
-        # uses the same drag and gravity as the live physics below, so the
-        # red dots show where the rock is heading without changing gameplay.
+        # Red dots mark the rocks' projected paths.
         for rock in rocks:
             shadow_x, shadow_y = rock["x"], rock["y"]
             shadow_vx, shadow_vy = rock["vx"], rock["vy"]
