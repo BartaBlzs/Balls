@@ -33,15 +33,29 @@ WALLET_PATH = os.path.join(os.path.expanduser("~"), ".pigeon_wallet.json")
 WALLET_SALT = "PIGEON_WALLET_V1"
 ROUND_SECS = 90
 MIN_W, MIN_H = 70, 20
-RETALIATION_SCORE = 40
-PLAYER_POINTS_MAX = 20
-SHOTGUN_FIRE_MIN = 2.8
-SHOTGUN_FIRE_MAX = 4.4
-SHOTGUN_PELLETS = 1
-SHOTGUN_SPEED = 16.0
-SHOTGUN_LIFE = 2.0
-SHOTGUN_HIT_DAMAGE = 5
-SHOTGUN_HIT_IFRAMES = 0.7
+PLAYER_HP_MAX = 100
+DIFFICULTY_STEP = 40
+PEOPLE_PER_DIFFICULTY = 2
+POST_SCORE_DIFFICULTY = 150
+POST_SCORE_SPEED_STEP = 0.35
+POST_SCORE_ROCK_RATE_STEP = 0.28
+TARGETED_ROCK_SCORE = 200
+TARGETED_ROCK_NOISE = 0.15
+ROCK_THROW_MIN = 4.5
+ROCK_THROW_MAX = 7.0
+ROCK_SPEED = 16.0
+ROCK_GRAVITY = 34.0
+ROCK_AIR_DRAG = 0.04
+ROCK_LIFE = 3.0
+ROCK_HIT_DAMAGE = 10
+ROCK_HIT_IFRAMES = 0.7
+ROCK_SALVO_SIZE = 3
+ROCK_SALVO_COOLDOWN_MIN = 5.0
+ROCK_SALVO_COOLDOWN_MAX = 8.0
+POOP_GRAVITY = 52.0
+POOP_MAX_SPEED = 42.0
+POOP_AIR_DRAG = 0.08
+PERSON_DEATH_TIME = 0.85
 
 # --------------------------------------------------------------------------- content
 
@@ -203,6 +217,13 @@ def synth(pack, size_i):
             ph += 2 * math.pi * (420 - 260 * t) * k / SR
             wob = 4 * math.sin(2 * math.pi * 35 * i / SR)
             out.append(math.sin(ph + wob) * (1 - t))
+    elif pack == "rock":
+        n = int(SR * 0.16)
+        ph = 0.0
+        for i in range(n):
+            t = i / n
+            ph += 2 * math.pi * (180 - 90 * t) / SR
+            out.append((math.sin(ph) + rnd.uniform(-0.35, 0.35)) * (1 - t) ** 2)
     elif pack == "boing":
         n = int(SR * 0.4 * L)
         ph = 0.0
@@ -256,8 +277,7 @@ class Audio:
             self.cache[key] = p
         return self.cache[key]
 
-    def play(self, pack_i, size_i):
-        pack = SOUNDS[pack_i]["key"]
+    def play_pack(self, pack, size_i):
         if self.cmd is None:
             curses.beep()
             return
@@ -274,6 +294,9 @@ class Audio:
                                                stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL))
         except OSError:
             self.cmd = None
+
+    def play(self, pack_i, size_i):
+        self.play_pack(SOUNDS[pack_i]["key"], size_i)
 
     def cleanup(self):
         for p in self.procs:
@@ -340,6 +363,24 @@ def center(win, y, s, attr=0):
     put(win, y, max(0, (w - len(s)) // 2), s, attr)
 
 
+def segment_hits_rect(x0, y0, x1, y1, left, top, right, bottom):
+    """Return whether a moving point crosses an axis-aligned rectangle."""
+    dx, dy = x1 - x0, y1 - y0
+    t_min, t_max = 0.0, 1.0
+    for start, delta, low, high in ((x0, dx, left, right), (y0, dy, top, bottom)):
+        if abs(delta) < 1e-9:
+            if start < low or start > high:
+                return False
+            continue
+        t1, t2 = (low - start) / delta, (high - start) / delta
+        if t1 > t2:
+            t1, t2 = t2, t1
+        t_min, t_max = max(t_min, t1), min(t_max, t2)
+        if t_min > t_max:
+            return False
+    return True
+
+
 def make_skyline(w, h, gl):
     grid = [[" "] * w for _ in range(h)]
     rng = random.Random(7)
@@ -385,12 +426,15 @@ class Person:
         self.dir = random.choice((-1, 1)) if edge is None else edge
         self.x = -3.0 if self.dir > 0 else float(w)
         self.stun = 0.0
-        self.gun_cd = random.uniform(0.6, 1.4)
+        self.dead = 0.0
+        self.throws_rocks = getattr(self, "throws_rocks", False)
         self.shout = ""
         self.anim = random.random() * 10
 
     def rows(self):
         k = self.KINDS[self.kind]
+        if self.dead > 0:
+            return ["   ", "_x_", "/ \\"]
         if self.stun > 0:
             return [" x ", "\\|/", "/ \\"]
         legs = "/ \\" if int(self.anim * 2) % 2 == 0 else " | "
@@ -405,7 +449,7 @@ def play(stdscr, save, wallet, audio):
     if w < MIN_W or h < MIN_H:
         return None
     size_i, sound_i = size_index(save), sound_index(save)
-    G, MAX_AMMO, POOP_COOLDOWN, RELOAD_COOLDOWN = 35.0, 5, 0.28, 2.0
+    MAX_AMMO, POOP_COOLDOWN, RELOAD_COOLDOWN = 5, 0.28, 2.0
 
     def layout():
         nonlocal h, w, gl, bg, clouds
@@ -418,18 +462,22 @@ def play(stdscr, save, wallet, audio):
     gl, bg, clouds = 0, [], []
     layout()
     people = [Person(w) for _ in range(max(4, w // 14))]
-    poops, pellets, particles, splats, floaters = [], [], [], [], []
+    poops, rocks, particles, splats, floaters = [], [], [], [], []
     px, py, vx, vy, face, flap = w / 2, 4.0, 0.0, 0.0, 1, 0.0
     ammo, cooldown, score, streak = MAX_AMMO, 0.0, 0, 0
-    player_points = PLAYER_POINTS_MAX
+    player_hp = PLAYER_HP_MAX
+    difficulty_tier = 0
     no_ammo_flash = 0.0
     reloading = False
-    retaliation_on = False
     retaliation_banner = 0.0
     hurt_iframes = 0.0
     hit_notice = 0.0
     reward_flash = 0.0
     reward_tier = 0
+    rock_salvo_remaining = 0
+    rock_salvo_cooldown = 0.0
+    rock_salvo_pending = False
+    next_rock_throw = 0.0
     died = False
     start = last = time.perf_counter()
 
@@ -480,22 +528,32 @@ def play(stdscr, save, wallet, audio):
         hurt_iframes = max(0.0, hurt_iframes - dt)
         hit_notice = max(0.0, hit_notice - dt)
         reward_flash = max(0.0, reward_flash - dt)
+        rock_salvo_cooldown = max(0.0, rock_salvo_cooldown - dt)
+        next_rock_throw = max(0.0, next_rock_throw - dt)
+        difficulty_tier = max(difficulty_tier, score // DIFFICULTY_STEP)
+        base_people = max(4, w // 14)
+        if score < POST_SCORE_DIFFICULTY:
+            target_people = base_people + difficulty_tier * PEOPLE_PER_DIFFICULTY
+        else:
+            target_people = base_people + (POST_SCORE_DIFFICULTY // DIFFICULTY_STEP) * PEOPLE_PER_DIFFICULTY
+        while len(people) < target_people:
+            people.append(Person(w))
         if reloading and cooldown <= 0:
             ammo = MAX_AMMO
             reloading = False
-
-        if (not retaliation_on) and score >= RETALIATION_SCORE:
-            retaliation_on = True
-            retaliation_banner = 3.0
-            for p in people:
-                p.gun_cd = min(p.gun_cd, random.uniform(0.2, 0.8))
 
         if want_drop and cooldown <= 0 and not reloading:
             s = SIZES[size_i]
             if ammo >= s["cost"]:
                 ammo -= s["cost"]
                 cooldown = POOP_COOLDOWN
-                poops.append(dict(x=px + (2.5 if face > 0 else 3.5), y=py + 2.0, vy=2.0, size=size_i))
+                poops.append(dict(
+                    x=px + (2.5 if face > 0 else 3.5),
+                    y=py + 2.0,
+                    vx=vx * 0.65,
+                    vy=max(2.0, vy * 0.65),
+                    size=size_i,
+                ))
                 if ammo <= 0:
                     reloading = True
                     cooldown = RELOAD_COOLDOWN
@@ -506,39 +564,44 @@ def play(stdscr, save, wallet, audio):
 
         # ---- people
         for p in people:
+            if p.dead > 0:
+                p.dead -= dt
+                if p.dead <= 0:
+                    p.respawn(w)
+                continue
             p.anim += dt * p.speed
             if p.stun > 0:
                 p.stun -= dt
                 continue
-            p.x += p.dir * p.speed * dt
-            if retaliation_on:
-                p.gun_cd -= dt
-                if p.gun_cd <= 0:
-                    ox, oy = p.x + 1.5, gl - 2.0
-                    tx, ty = px + 2.5 + random.uniform(-7.0, 7.0), py + 1.0 + random.uniform(-3.5, 3.5)
-                    dx, dy = tx - ox, ty - oy
-                    n = math.hypot(dx, dy) or 1.0
-                    bx, by = dx / n, dy / n
-                    for _ in range(SHOTGUN_PELLETS):
-                        pellets.append(dict(
-                            x=ox,
-                            y=oy,
-                            vx=(bx + random.uniform(-0.35, 0.35)) * SHOTGUN_SPEED,
-                            vy=(by + random.uniform(-0.3, 0.3)) * SHOTGUN_SPEED,
-                            life=SHOTGUN_LIFE,
-                        ))
-                    p.gun_cd = random.uniform(SHOTGUN_FIRE_MIN, SHOTGUN_FIRE_MAX)
+            speed_multiplier = 1.0
+            if score >= POST_SCORE_DIFFICULTY:
+                post_score_tier = 1 + (score - POST_SCORE_DIFFICULTY) // DIFFICULTY_STEP
+                speed_multiplier += post_score_tier * POST_SCORE_SPEED_STEP
+            p.x += p.dir * p.speed * speed_multiplier * dt
             if p.x > w + 1 or p.x < -4:
                 p.respawn(w, edge=-p.dir)
 
         # ---- poops
         for poop in poops[:]:
-            poop["vy"] += G * dt
+            previous_x, previous_y = poop["x"], poop["y"]
+            poop["vy"] = min(POOP_MAX_SPEED, poop["vy"] + POOP_GRAVITY * dt)
+            drag = math.exp(-POOP_AIR_DRAG * dt)
+            poop["vx"] *= drag
+            poop["x"] += poop["vx"] * dt
             poop["y"] += poop["vy"] * dt
             s = SIZES[poop["size"]]
             hit = None
             for p in people:
-                if gl - 3 <= poop["y"] <= gl and abs(poop["x"] - (p.x + 1.5)) <= 1.5 + s["hw"]:
+                if p.dead > 0:
+                    continue
+                # Expand the whole person sprite by the poop radius and use
+                # the previous/current positions to prevent fast-falling hits
+                # from passing between terminal rows.
+                half_width = max(0.5, len(s["glyph"]) / 2) + 0.5
+                if segment_hits_rect(
+                        previous_x, previous_y, poop["x"], poop["y"],
+                        p.x + 1.5 - half_width, gl - 3.5 - 0.5,
+                        p.x + 1.5 + half_width, gl + 0.5):
                     hit = p
                     break
             if hit or poop["y"] >= gl - 1:
@@ -548,25 +611,69 @@ def play(stdscr, save, wallet, audio):
                     particles.append([poop["x"], min(poop["y"], gl - 2), random.uniform(-12, 12),
                                       random.uniform(-14, -3), 0.5, random.choice(".,*'`")])
                 if hit:
-                    if hit.stun <= 0:
-                        streak += 1
-                        mult = min(5, 1 + streak // 2)
-                        gained = s["pts"] * mult * Person.KINDS[hit.kind]["mult"]
-                        score += gained
-                        new_tier = score // 30
-                        if new_tier > reward_tier:
-                            bonus = (new_tier - reward_tier) * 5
-                            reward_tier = new_tier
-                            wallet["money"] += bonus
-                            write_wallet(wallet["money"])
-                            reward_flash = 1.5
-                            floaters.append([px + 1, max(2.0, py - 1.0), "+$%d" % bonus, 1.1])
-                        floaters.append([hit.x + 1, gl - 5.0, "+%d" % gained, 1.0])
-                        hit.shout = random.choice(VIP_SHOUTS if hit.kind == "vip" else SHOUTS)
-                    hit.stun = 1.3
+                    streak += 1
+                    mult = min(5, 1 + streak // 2)
+                    gained = s["pts"] * mult * Person.KINDS[hit.kind]["mult"]
+                    score += gained
+                    new_tier = score // 30
+                    if new_tier > reward_tier:
+                        bonus = (new_tier - reward_tier) * 5
+                        reward_tier = new_tier
+                        wallet["money"] += bonus
+                        write_wallet(wallet["money"])
+                        reward_flash = 1.5
+                        floaters.append([px + 1, max(2.0, py - 1.0), "+$%d" % bonus, 1.1])
+                    floaters.append([hit.x + 1, gl - 5.0, "+%d" % gained, 1.0])
+                    hit.shout = random.choice(VIP_SHOUTS if hit.kind == "vip" else SHOUTS)
+                    hit.throws_rocks = True
+                    rock_salvo_pending = True
+                    retaliation_banner = 3.0
+                    hit.dead = PERSON_DEATH_TIME
+                    hit.stun = 0.0
                 else:
                     streak = 0
                     splats.append([poop["x"], s["splat"], 4.0])
+
+        if rock_salvo_pending and rock_salvo_remaining == 0 and rock_salvo_cooldown <= 0:
+            rock_salvo_remaining = ROCK_SALVO_SIZE
+            rock_salvo_pending = False
+            next_rock_throw = random.uniform(1.0, 2.0)
+        if rock_salvo_remaining > 0 and next_rock_throw <= 0:
+            throwers = [p for p in people if p.throws_rocks and p.dead <= 0]
+            if throwers:
+                thrower = random.choice(throwers)
+                ox, oy = thrower.x + 1.5, gl - 2.0
+                difficulty = 1.0 + difficulty_tier * 0.12
+                rock_speed = ROCK_SPEED + difficulty_tier * 1.5
+                target_lead = 0.45
+                aim_noise = 0.8
+                if score >= TARGETED_ROCK_SCORE:
+                    post_score_tier = 1 + (score - TARGETED_ROCK_SCORE) // DIFFICULTY_STEP
+                    target_lead = 0.65 + post_score_tier * 0.05
+                    aim_noise = max(TARGETED_ROCK_NOISE, 0.8 / (post_score_tier + 2))
+                tx = px + 2.5 + vx * target_lead
+                ty = py + 1.0 + vy * target_lead
+                dx, dy = tx - ox, ty - oy
+                distance = math.hypot(dx, dy) or 1.0
+                flight_time = min(1.5, max(0.65, distance / rock_speed))
+                rocks.append(dict(
+                    x=ox,
+                    y=oy,
+                    vx=dx / flight_time + random.uniform(-aim_noise, aim_noise),
+                    vy=dy / flight_time - 0.5 * ROCK_GRAVITY * flight_time + random.uniform(-aim_noise, aim_noise),
+                    life=ROCK_LIFE,
+                ))
+                audio.play_pack("rock", 0)
+                rock_salvo_remaining -= 1
+                rock_rate = 1.0
+                if score >= POST_SCORE_DIFFICULTY:
+                    post_score_tier = 1 + (score - POST_SCORE_DIFFICULTY) // DIFFICULTY_STEP
+                    rock_rate += post_score_tier * POST_SCORE_ROCK_RATE_STEP
+                next_rock_throw = random.uniform(ROCK_THROW_MIN, ROCK_THROW_MAX) / (difficulty * rock_rate)
+                if rock_salvo_remaining == 0:
+                    rock_salvo_cooldown = random.uniform(
+                        ROCK_SALVO_COOLDOWN_MIN, ROCK_SALVO_COOLDOWN_MAX
+                    ) / rock_rate
 
         for pt in particles[:]:
             pt[2] *= 0.98
@@ -589,23 +696,30 @@ def play(stdscr, save, wallet, audio):
             c[0] += c[2] * dt
             if c[0] > w + 8:
                 c[0] = -8
-        for pel in pellets[:]:
-            pel["x"] += pel["vx"] * dt
-            pel["y"] += pel["vy"] * dt
-            pel["life"] -= dt
-            if (pel["life"] <= 0 or pel["x"] < -1 or pel["x"] > w + 1 or
-                    pel["y"] < 0 or pel["y"] > gl):
-                pellets.remove(pel)
+        for rock in rocks[:]:
+            previous_x, previous_y = rock["x"], rock["y"]
+            rock["vx"] *= math.exp(-ROCK_AIR_DRAG * dt)
+            rock["vy"] += ROCK_GRAVITY * dt
+            rock["x"] += rock["vx"] * dt
+            rock["y"] += rock["vy"] * dt
+            rock["life"] -= dt
+            if (rock["life"] <= 0 or rock["x"] < -1 or rock["x"] > w + 1 or
+                    rock["y"] < 0 or rock["y"] > gl):
+                rocks.remove(rock)
                 continue
-            if (not reloading) and hurt_iframes <= 0 and abs(pel["x"] - (px + 2.5)) <= 2.5 and abs(pel["y"] - (py + 0.8)) <= 1.8:
-                pellets.remove(pel)
-                hurt_iframes = SHOTGUN_HIT_IFRAMES
+            if ((not reloading) and hurt_iframes <= 0 and
+                    segment_hits_rect(
+                        previous_x, previous_y, rock["x"], rock["y"],
+                        px - 0.5, py - 0.5, px + 5.5, py + 2.5)):
+                rocks.remove(rock)
+                hurt_iframes = ROCK_HIT_IFRAMES
                 hit_notice = 1.2
                 streak = 0
-                player_points = max(0, player_points - SHOTGUN_HIT_DAMAGE)
-                vx = min(24, max(-24, vx + pel["vx"] * 0.15))
-                vy = min(11, max(-11, vy + pel["vy"] * 0.08))
-                if player_points <= 0:
+                player_hp = max(0, player_hp - ROCK_HIT_DAMAGE)
+                score = max(0, score - 1)
+                vx = min(24, max(-24, vx + rock["vx"] * 0.15))
+                vy = min(11, max(-11, vy + rock["vy"] * 0.08))
+                if player_hp <= 0:
                     died = True
                     break
 
@@ -626,34 +740,32 @@ def play(stdscr, save, wallet, audio):
             k = Person.KINDS[p.kind]
             attr = COL[k["color"]] | (curses.A_BOLD if p.kind == "vip" else 0)
             put_sprite(stdscr, gl - 3, int(p.x), p.rows(), attr)
-            if p.stun > 0 and p.shout:
+            if (p.dead > 0 or p.stun > 0) and p.shout:
                 put(stdscr, gl - 4, int(p.x + 1.5 - len(p.shout) / 2), p.shout, COL["red"] | curses.A_BOLD)
         for poop in poops:
             g = SIZES[poop["size"]]["glyph"]
             put(stdscr, int(poop["y"]), int(poop["x"] - len(g) / 2), g, COL["yellow"] | curses.A_BOLD)
         for pt in particles:
             put(stdscr, int(pt[1]), int(pt[0]), pt[5], COL["yellow"])
-        for pel in pellets:
-            ch = "-" if abs(pel["vx"]) > abs(pel["vy"]) * 1.7 else ("\\" if pel["vx"] > 0 else "/")
-            put(stdscr, int(pel["y"]), int(pel["x"]), ch, COL["red"] | curses.A_BOLD)
+        for rock in rocks:
+            put(stdscr, int(rock["y"]), int(rock["x"]), "O", COL["red"] | curses.A_BOLD)
         for f in floaters:
             put(stdscr, int(f[1]), int(f[0]), f[2], COL["yellow"] | curses.A_BOLD)
         frames = PIGEON_R if face > 0 else PIGEON_L
         put_sprite(stdscr, int(py), int(px), frames[int(flap) % 2], COL["white"] | curses.A_BOLD)
         if hit_notice > 0:
-            put(stdscr, max(2, int(py) - 1), int(px) - 2, "-%d SHOTGUN!" % SHOTGUN_HIT_DAMAGE, COL["red"] | curses.A_BOLD)
+            put(stdscr, max(2, int(py) - 1), int(px) - 2, "-10 HP  -1 SCORE", COL["red"] | curses.A_BOLD)
 
         mult = min(5, 1 + streak // 2)
         put(stdscr, 0, 1, "SCORE %05d" % score, COL["yellow"] | curses.A_BOLD)
         put(stdscr, 0, 16, "STREAK %d (x%d)" % (streak, mult), COL["magenta"] | curses.A_BOLD)
-        hp_attr = (COL["red"] | curses.A_BOLD) if player_points <= SHOTGUN_HIT_DAMAGE else (COL["green"] | curses.A_BOLD)
-        put(stdscr, 0, max(1, w // 2 - 4), "HP %02d" % player_points, hp_attr)
+        hp_attr = (COL["red"] | curses.A_BOLD) if player_hp <= ROCK_HIT_DAMAGE else (COL["green"] | curses.A_BOLD)
+        put(stdscr, 0, max(1, w // 2 - 5), "HP %03d" % player_hp, hp_attr)
+        put(stdscr, 0, max(1, w // 2 + 6), "LV %d" % (difficulty_tier + 1), COL["red"] | curses.A_BOLD)
         put(stdscr, 0, max(30, w - 26), "MONEY $%d" % wallet["money"], COL["green"] | curses.A_BOLD)
         put(stdscr, 0, w - 12, "TIME %3d" % math.ceil(left), COL["white"] | curses.A_BOLD)
-        if retaliation_on:
-            put(stdscr, 0, max(1, w // 2 - 10), "RETALIATION ACTIVE", COL["red"] | curses.A_BOLD)
         if retaliation_banner > 0:
-            center(stdscr, 2, "PEOPLE FOUND SHOTGUNS - DODGE!", COL["red"] | curses.A_BOLD)
+            center(stdscr, 2, "POOPED PEOPLE ARE THROWING ROCKS - DODGE!", COL["red"] | curses.A_BOLD)
         if reward_flash > 0:
             center(stdscr, 3, "+$5 every 30 score!", COL["green"] | curses.A_BOLD)
         bar = int(ammo / MAX_AMMO * 12)
@@ -664,7 +776,7 @@ def play(stdscr, save, wallet, audio):
         put(stdscr, 1, 24, cd_text, cd_attr)
         put(stdscr, 1, 38, "SIZE %s (cost %d)" % (SIZES[size_i]["name"], SIZES[size_i]["cost"]), COL["white"])
         put(stdscr, 1, 62, "SOUND %s" % SOUNDS[sound_i]["name"], COL["white"])
-        put(stdscr, h - 1, 1, "arrows/WASD fly   SPACE poop   1-4 size   M sound   dodge shotgun fire   Q menu", curses.A_DIM)
+        put(stdscr, h - 1, 1, "arrows/WASD fly   SPACE poop   1-4 size   M sound   dodge thrown rocks   Q menu", curses.A_DIM)
         stdscr.refresh()
 
         time.sleep(max(0.0, 1 / 30 - (time.perf_counter() - now)))
