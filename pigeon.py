@@ -187,7 +187,7 @@ def sound_index(save):
 
 # --------------------------------------------------------------------------- audio
 
-VOLUME = 0.3
+VOLUME = 0.1
 MAX_SIMULTANEOUS_SOUNDS = 16
 
 class Audio:
@@ -512,7 +512,13 @@ def play(stdscr, save, wallet, audio):
             if ammo >= s["cost"]:
                 ammo -= s["cost"]
                 cooldown = POOP_COOLDOWN
-                poops.append(dict(x=px + (2.5 if face > 0 else 3.5), y=py + 2.0, vy=2.0, size=size_i))
+                poops.append(dict(
+                    x=px + (2.5 if face > 0 else 3.5),
+                    y=py + 2.0,
+                    vx=vx * 0.65,
+                    vy=max(2.0, vy * 0.65),
+                    size=size_i,
+                ))
                 audio.play(sound_i, size_i)
                 if ammo <= 0:
                     reloading = True
@@ -622,7 +628,7 @@ def play(stdscr, save, wallet, audio):
                     vy=dy / flight_time - 0.5 * ROCK_GRAVITY * flight_time + random.uniform(-aim_noise, aim_noise),
                     life=ROCK_LIFE,
                 ))
-                audio.play_pack("rock", 0)
+                audio.play(4, 0)
                 rock_salvo_remaining -= 1
                 rock_rate = 1.0
                 if score >= POST_SCORE_DIFFICULTY:
