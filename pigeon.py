@@ -31,7 +31,7 @@ except ImportError:
 SAVE_PATH = os.path.join(os.path.expanduser("~"), ".pigeon_save.json")
 ROUND_SECS = 90
 MIN_W, MIN_H = 70, 20
-RETALIATION_SCORE = 500
+RETALIATION_SCORE = 40
 SHOTGUN_FIRE_MIN = 1.4
 SHOTGUN_FIRE_MAX = 2.4
 SHOTGUN_PELLETS = 2
@@ -376,7 +376,7 @@ def play(stdscr, save, audio):
     if w < MIN_W or h < MIN_H:
         return None
     size_i, sound_i = size_index(save), sound_index(save)
-    G, MAX_AMMO, REGEN = 35.0, 12.0, 2.2
+    G, MAX_AMMO, REGEN, POOP_COOLDOWN = 35.0, 12.0, 2.2, 0.35
 
     def layout():
         nonlocal h, w, gl, bg, clouds
@@ -457,7 +457,7 @@ def play(stdscr, save, audio):
             s = SIZES[size_i]
             if ammo >= s["cost"]:
                 ammo -= s["cost"]
-                cooldown = 0.1
+                cooldown = POOP_COOLDOWN
                 poops.append(dict(x=px + (2.5 if face > 0 else 3.5), y=py + 2.0, vy=2.0, size=size_i))
             else:
                 no_ammo_flash = 0.6
@@ -597,9 +597,11 @@ def play(stdscr, save, audio):
             center(stdscr, 2, "PEOPLE FOUND SHOTGUNS - DODGE!", COL["red"] | curses.A_BOLD)
         bar = int(ammo / MAX_AMMO * 12)
         ammo_attr = COL["red"] | curses.A_BOLD if no_ammo_flash > 0 else COL["cyan"]
-        put(stdscr, 1, 1, "AMMO [%s%s]" % ("#" * bar, "-" * (12 - bar)), ammo_attr)
-        put(stdscr, 1, 21, "SIZE %s (cost %d)" % (SIZES[size_i]["name"], SIZES[size_i]["cost"]), COL["white"])
-        put(stdscr, 1, 44, "SOUND %s" % SOUNDS[sound_i]["name"], COL["white"])
+        put(stdscr, 1, 1, "SHITTING [%s%s]" % ("#" * bar, "-" * (12 - bar)), ammo_attr)
+        cd_attr = COL["red"] | curses.A_BOLD if cooldown > 0 else COL["green"] | curses.A_BOLD
+        put(stdscr, 1, 24, "CD %s" % ("%.1fs" % cooldown if cooldown > 0 else "READY"), cd_attr)
+        put(stdscr, 1, 38, "SIZE %s (cost %d)" % (SIZES[size_i]["name"], SIZES[size_i]["cost"]), COL["white"])
+        put(stdscr, 1, 62, "SOUND %s" % SOUNDS[sound_i]["name"], COL["white"])
         put(stdscr, h - 1, 1, "arrows/WASD fly   SPACE poop   1-4 size   M sound   dodge shotgun fire   Q menu", curses.A_DIM)
         stdscr.refresh()
 
