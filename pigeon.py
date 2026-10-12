@@ -21,7 +21,7 @@ MIN_W, MIN_H = 70, 20
 PLAYER_HP_MAX = 100
 PEOPLE_PER_DIFFICULTY = 3
 MAX_PEOPLE = 10
-GROUP_THREE_CHANCE = 0.20
+GROUP_THREE_CHANCE = 0.25
 GROUP_FIVE_CHANCE = 0.15
 NEAR_PERSON_DISTANCE = 8.0
 POST_SCORE_SPEED_STEP = 0.55
@@ -35,13 +35,19 @@ ROCK_LIFE = 3.0
 ROCK_HIT_DAMAGE = 10
 ROCK_HIT_IFRAMES = 0.7
 ROCK_SALVO_SIZES = (3, 6, 9, 16)
-POOP_HIT_LOCKOUT = 1.0
+ROCK_SHADOW_STEP = 0.12
+ROCK_SHADOW_TIME = 1.5
+POOP_HIT_LOCKOUT = 2.0
 ROCK_SALVO_COOLDOWN_MIN = 1.0
 ROCK_SALVO_COOLDOWN_MAX = 3.0
+LOW_ALTITUDE_BAND = 10.0
+LOW_ALTITUDE_HITBOX_X = 1.0
+LOW_ALTITUDE_HITBOX_Y = 1.5
 POOP_GRAVITY = 52.0
 POOP_MAX_SPEED = 42.0
 POOP_AIR_DRAG = 0.08
 PERSON_DEATH_TIME = 0.85
+PERSON_HIT_VERTICAL_MARGIN = 0.5
 
 # --------------------------------------------------------------------------- content
 
@@ -540,7 +546,11 @@ def play(stdscr, save, wallet, audio):
     reward_flash = 0.0
     announcement = ""
     announcement_time = 0.0
-    last_level = score_difficulty(score)[1]
+    # Burst modes increase the pressure immediately: Single keeps the
+    # original difficulty, while Double/Triple/Shower start one/two/three
+    # difficulty tiers higher.  The existing hardest tier remains the cap.
+    mode_hardness = mode["count"]
+    last_level = min(3, score_difficulty(score)[1] + mode_hardness - 1)
     near_people = False
     reward_tier = 0
     rock_salvo_remaining = 0
@@ -600,7 +610,9 @@ def play(stdscr, save, wallet, audio):
         announcement_time = max(0.0, announcement_time - dt)
         rock_salvo_cooldown = max(0.0, rock_salvo_cooldown - dt)
         next_rock_throw = max(0.0, next_rock_throw - dt)
-        difficulty_name, difficulty_tier = score_difficulty(score)
+        _, score_tier = score_difficulty(score)
+        difficulty_tier = min(3, score_tier + mode_hardness - 1)
+        difficulty_name = ("EASY", "MEDIUM", "HARDCORE", "U ARE FUCKED")[difficulty_tier]
         if difficulty_tier != last_level:
             last_level = difficulty_tier
             announcement = "LEVEL UP: " + difficulty_name
@@ -672,9 +684,10 @@ def play(stdscr, save, wallet, audio):
         near_people = close_now
 
         # ---- poops
-        # Count only direct projectile impacts for hit-combo announcements.
-        # Group splash victims still score normally, but are not extra direct hits.
+        # Count unique direct projectile victims for hit-combo announcements.
+        # Only people whose body is crossed by the poop can score.
         direct_hits_this_moment = 0
+        direct_hit_people = set()
         for poop in poops[:]:
             previous_x, previous_y = poop["x"], poop["y"]
             poop["vy"] = min(POOP_MAX_SPEED, poop["vy"] + POOP_GRAVITY * dt)
@@ -687,14 +700,13 @@ def play(stdscr, save, wallet, audio):
             for p in people:
                 if p.dead > 0 or p.stun > 0:
                     continue
-                # Expand the whole person sprite by the poop radius and use
-                # the previous/current positions to prevent fast-falling hits
-                # from passing between terminal rows.
-                half_width = max(0.5, len(s["glyph"]) / 2) + 0.5
+                # Include the head, torso, and legs.  Keep the horizontal
+                # bounds at the actual three-column body so neighbors do not
+                # share hitboxes.
                 if segment_hits_rect(
                         previous_x, previous_y, poop["x"], poop["y"],
-                        p.x + 1.5 - half_width, gl - 3.5 - 0.5,
-                        p.x + 1.5 + half_width, gl + 0.5):
+                        p.x, gl - 3.0 - PERSON_HIT_VERTICAL_MARGIN,
+                        p.x + 3.0, gl + PERSON_HIT_VERTICAL_MARGIN):
                     hit = p
                     break
             if hit or poop["y"] >= gl - 1:
@@ -703,14 +715,16 @@ def play(stdscr, save, wallet, audio):
                     particles.append([poop["x"], min(poop["y"], gl - 2), random.uniform(-12, 12),
                                       random.uniform(-14, -3), 0.5, random.choice(".,*'`")])
                 if hit:
-                    direct_hits_this_moment += 1
-                    victims = [hit]
-                    if hit.group_size in (3, 5) and hit.group_id is not None:
-                        victims.extend(
-                            person for person in people
-                            if person is not hit and person.dead <= 0 and person.stun <= 0
-                            and person.group_id == hit.group_id
-                        )
+                    # A burst can contain several projectiles.  Do not let
+                    # more than one projectile (or a future collision pass)
+                    # count the same person more than once for a combo.
+                    if id(hit) not in direct_hit_people:
+                        direct_hit_people.add(id(hit))
+                        direct_hits_this_moment += 1
+                    # A collision affects only the person whose hitbox the
+                    # projectile crossed.  Being in the same group is not a
+                    # hit and must not award points or trigger retaliation.
+                    victims = (hit,)
                     for victim in victims:
                         distance = min(abs((victim.x + 1.5) - (px + 2.5)),
                                        w - abs((victim.x + 1.5) - (px + 2.5)))
@@ -725,7 +739,7 @@ def play(stdscr, save, wallet, audio):
                             write_wallet(wallet["money"])
                             reward_flash = 1.5
                             floaters.append([px + 1, max(2.0, py - 1.0), "+$%d" % bonus, 1.1])
-                        floaters.append([victim.x + 1, gl - 5.0, "+%d" % gained, 1.0])
+                        floaters.append([victim.x + 1, gl - 5.0, "+%d$" % gained, 1.0])
                         victim.shout = random.choice(VIP_SHOUTS if victim.kind == "vip" else SHOUTS)
                         victim.throws_rocks = True
                         rock_throw_queue.append(victim)
@@ -822,10 +836,18 @@ def play(stdscr, save, wallet, audio):
                     rock["y"] < 0 or rock["y"] > gl):
                 rocks.remove(rock)
                 continue
+            # The closer the bird is to the ground, the more exposed it is.
+            # Increase the rock collision zone gradually over the lowest part
+            # of the flight area instead of making low altitude an instant
+            # death line.
+            low_altitude = max(0.0, min(1.0, (py - (gl - 8 - LOW_ALTITUDE_BAND)) / LOW_ALTITUDE_BAND))
+            hitbox_x = LOW_ALTITUDE_HITBOX_X * low_altitude
+            hitbox_y = LOW_ALTITUDE_HITBOX_Y * low_altitude
             if ((not reloading) and hurt_iframes <= 0 and
                     segment_hits_rect(
                         previous_x, previous_y, rock["x"], rock["y"],
-                        px - 0.5, py - 0.5, px + 5.5, py + 2.5)):
+                        px - 0.5 - hitbox_x, py - 0.5 - hitbox_y,
+                        px + 5.5 + hitbox_x, py + 2.5 + hitbox_y)):
                 rocks.remove(rock)
                 hurt_iframes = ROCK_HIT_IFRAMES
                 poop_lockout = POOP_HIT_LOCKOUT
@@ -862,6 +884,23 @@ def play(stdscr, save, wallet, audio):
             put(stdscr, int(poop["y"]), int(poop["x"] - len(g) / 2), g, COL["yellow"] | curses.A_BOLD)
         for pt in particles:
             put(stdscr, int(pt[1]), int(pt[0]), pt[5], COL["yellow"])
+        # Draw a short projected path for each incoming rock.  The preview
+        # uses the same drag and gravity as the live physics below, so the
+        # red dots show where the rock is heading without changing gameplay.
+        for rock in rocks:
+            shadow_x, shadow_y = rock["x"], rock["y"]
+            shadow_vx, shadow_vy = rock["vx"], rock["vy"]
+            shadow_time = min(rock["life"], ROCK_SHADOW_TIME)
+            while shadow_time > 0:
+                step = min(ROCK_SHADOW_STEP, shadow_time)
+                shadow_vx *= math.exp(-ROCK_AIR_DRAG * step)
+                shadow_vy += ROCK_GRAVITY * step
+                shadow_x += shadow_vx * step
+                shadow_y += shadow_vy * step
+                if shadow_x < 0 or shadow_x >= w or shadow_y < 0 or shadow_y > gl:
+                    break
+                put(stdscr, int(shadow_y), int(shadow_x), ".", COL["red"] | curses.A_DIM)
+                shadow_time -= step
         for rock in rocks:
             put(stdscr, int(rock["y"]), int(rock["x"]), "O", COL["red"] | curses.A_BOLD)
         for f in floaters:
@@ -886,8 +925,12 @@ def play(stdscr, save, wallet, audio):
         bar = int(ammo / MAX_AMMO * 12)
         ammo_attr = COL["red"] | curses.A_BOLD if no_ammo_flash > 0 else COL["cyan"]
         put(stdscr, 1, 1, "AMMO [%s%s]" % ("#" * bar, "-" * (12 - bar)), ammo_attr)
-        cd_attr = (COL["red"] | curses.A_BOLD) if reloading else ((COL["yellow"] | curses.A_BOLD) if cooldown > 0 else (COL["green"] | curses.A_BOLD))
-        cd_text = "RELOAD %.1fs" % cooldown if reloading else ("CD %.1fs" % cooldown if cooldown > 0 else "CD READY")
+        if poop_lockout > 0:
+            cd_attr = COL["red"] | curses.A_BOLD
+            cd_text = "ROCK HIT %.1fs" % poop_lockout
+        else:
+            cd_attr = (COL["red"] | curses.A_BOLD) if reloading else ((COL["yellow"] | curses.A_BOLD) if cooldown > 0 else (COL["green"] | curses.A_BOLD))
+            cd_text = "RELOAD %.1fs" % cooldown if reloading else ("CD %.1fs" % cooldown if cooldown > 0 else "CD READY")
         put(stdscr, 1, 18, cd_text, cd_attr)
         put(stdscr, 1, 34, "RESPECT %d  RESPECT+ %d" %
             (save["respect"], save["respect_plus"]), COL["red"] | curses.A_BOLD)
