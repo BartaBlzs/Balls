@@ -672,7 +672,9 @@ def play(stdscr, save, wallet, audio):
         near_people = close_now
 
         # ---- poops
-        kills_this_moment = 0
+        # Count only direct projectile impacts for hit-combo announcements.
+        # Group splash victims still score normally, but are not extra direct hits.
+        direct_hits_this_moment = 0
         for poop in poops[:]:
             previous_x, previous_y = poop["x"], poop["y"]
             poop["vy"] = min(POOP_MAX_SPEED, poop["vy"] + POOP_GRAVITY * dt)
@@ -701,6 +703,7 @@ def play(stdscr, save, wallet, audio):
                     particles.append([poop["x"], min(poop["y"], gl - 2), random.uniform(-12, 12),
                                       random.uniform(-14, -3), 0.5, random.choice(".,*'`")])
                 if hit:
+                    direct_hits_this_moment += 1
                     victims = [hit]
                     if hit.group_size in (3, 5) and hit.group_id is not None:
                         victims.extend(
@@ -709,7 +712,6 @@ def play(stdscr, save, wallet, audio):
                             and person.group_id == hit.group_id
                         )
                     for victim in victims:
-                        kills_this_moment += 1
                         distance = min(abs((victim.x + 1.5) - (px + 2.5)),
                                        w - abs((victim.x + 1.5) - (px + 2.5)))
                         proximity_mult = 2 if distance <= NEAR_PERSON_DISTANCE else 1
@@ -733,12 +735,12 @@ def play(stdscr, save, wallet, audio):
                 else:
                     splats.append([poop["x"], s["splat"], 4.0])
 
-        if kills_this_moment >= 5:
+        if direct_hits_this_moment >= 5:
             save["respect_plus"] += 1
             write_save(save)
             announcement = "AMAZING! FIVE HIT! RESPECT+ +1"
             announcement_time = 2.5
-        elif kills_this_moment >= 3:
+        elif direct_hits_this_moment >= 3:
             save["respect"] += 1
             write_save(save)
             announcement = "GOOD JOB! TRIPLE HIT! RESPECT +1"
@@ -1078,8 +1080,28 @@ def market(stdscr, save, wallet, audio):
             return
 
 
+def confirm_clear_user_data(stdscr, save, wallet):
+    """Ask for explicit confirmation before resetting local player data."""
+    stdscr.nodelay(False)
+    stdscr.timeout(-1)
+    cursor(0)
+    stdscr.erase()
+    h, _ = stdscr.getmaxyx()
+    cy = h // 2
+    center(stdscr, cy - 3, "CLEAR USER DATA?", COL["red"] | curses.A_BOLD)
+    center(stdscr, cy - 1, "This permanently resets your local progress.")
+    center(stdscr, cy, "Wallet, best score, unlocks, and settings will be erased.")
+    center(stdscr, cy + 2, "Press Y to confirm, or any other key to cancel.", COL["yellow"])
+    stdscr.refresh()
+    key = stdscr.getch()
+    if key in (ord("y"), ord("Y")):
+        clear_user_data(save, wallet)
+        return "User data cleared. Progress and wallet reset."
+    return "Clear data cancelled."
+
+
 def menu(stdscr, save, wallet, audio):
-    items = ["PLAY", "MARKET", "QUIT"]
+    items = ["PLAY", "MARKET", "CLEAR USER DATA", "QUIT"]
     sel, msg = 0, ""
     while True:
         stdscr.nodelay(False)
@@ -1107,7 +1129,7 @@ def menu(stdscr, save, wallet, audio):
             sel = (sel + 1) % len(items)
         elif k in (10, 13, curses.KEY_ENTER):
             act = sel
-        elif ord("1") <= k <= ord("3"):
+        elif ord("1") <= k <= ord("4"):
             act = k - ord("1")
         elif k in (ord("q"), ord("Q"), 27):
             return
@@ -1118,6 +1140,8 @@ def menu(stdscr, save, wallet, audio):
         elif act == 1:
             market(stdscr, save, wallet, audio)
         elif act == 2:
+            msg = confirm_clear_user_data(stdscr, save, wallet)
+        elif act == 3:
             return
 
 
