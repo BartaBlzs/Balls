@@ -534,7 +534,11 @@ def play(stdscr, save, wallet, audio):
             person.x = min(w - 3.0, max(0.0, w / 2 + (offset - (group_size - 1) / 2) * 3.0))
         index += group_size
     poops, rocks, particles, splats, floaters = [], [], [], [], []
-    px, py, vx, vy, face, flap = w / 2, 4.0, 0.0, 0.0, 1, 0.0
+    # Spawn the pigeon in the center of the playable area at the start of
+    # every round, accounting for the sprite's six-column width.
+    px = max(0.0, (w - 6) / 2)
+    py = (3.0 + (gl - 8.0)) / 2
+    vx, vy, face, flap = 0.0, 0.0, 1, 0.0
     ammo, cooldown, score = MAX_AMMO, 0.0, 0
     poop_lockout = 0.0
     player_hp = PLAYER_HP_MAX
