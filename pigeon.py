@@ -36,6 +36,7 @@ MIN_W, MIN_H = 70, 20
 PLAYER_HP_MAX = 100
 DIFFICULTY_STEP = 40
 PEOPLE_PER_DIFFICULTY = 2
+MAX_PEOPLE = 10
 POST_SCORE_DIFFICULTY = 150
 POST_SCORE_SPEED_STEP = 0.35
 POST_SCORE_ROCK_RATE_STEP = 0.28
@@ -73,7 +74,14 @@ SOUNDS = [
     dict(key="boing",   name="Boing"),
     dict(key="bomb",    name="Bomb"),
 ]
+POOP_MODES = [
+    dict(key="single", name="Single", count=1, cost=0, sound="plop"),
+    dict(key="double", name="Double", count=2, cost=40, sound="splat"),
+    dict(key="triple", name="Triple", count=3, cost=75, sound="squelch"),
+    dict(key="shower", name="Shower", count=5, cost=120, sound="bomb"),
+]
 FREE = {"size:small", "sound:plop"}
+CODE_REDEEM_COST = 10
 
 # sha256 of the code (upper-cased, no spaces) -> what it unlocks.
 CODES = {
@@ -103,13 +111,19 @@ def code_hash(raw):
 
 
 def load_save():
-    data = {"unlocked": [], "size": "small", "sound": "plop", "best": 0}
+    data = {
+        "unlocked": [], "size": "small", "sound": "plop",
+        "poop_mode": "single", "poop_modes": ["single"], "best": 0,
+    }
     try:
         with open(SAVE_PATH) as f:
             data.update(json.load(f))
     except (OSError, ValueError):
         pass
     data["unlocked"] = sorted(set(data["unlocked"]) | FREE)
+    if data["poop_mode"] not in {mode["key"] for mode in POOP_MODES}:
+        data["poop_mode"] = "single"
+    data["poop_modes"] = sorted(set(data.get("poop_modes", [])) & {mode["key"] for mode in POOP_MODES} | {"single"})
     return data
 
 
@@ -154,13 +168,17 @@ def label(unlock_id):
     return next(s["name"] for s in SOUNDS if s["key"] == key) + " sound"
 
 
-def redeem(save, raw):
+def redeem(save, wallet, raw):
     unlocks = CODES.get(code_hash(raw))
     if not unlocks:
         return False, "Invalid code."
     new = [u for u in unlocks if u not in save["unlocked"]]
     if not new:
         return False, "You already redeemed that code."
+    if wallet["money"] < CODE_REDEEM_COST:
+        return False, "Need $%d to redeem a code." % CODE_REDEEM_COST
+    wallet["money"] -= CODE_REDEEM_COST
+    write_wallet(wallet["money"])
     save["unlocked"] = sorted(set(save["unlocked"]) | set(new))
     write_save(save)
     return True, "Unlocked: " + ", ".join(label(u) for u in new)
@@ -449,6 +467,7 @@ def play(stdscr, save, wallet, audio):
     if w < MIN_W or h < MIN_H:
         return None
     size_i, sound_i = size_index(save), sound_index(save)
+    mode = next(m for m in POOP_MODES if m["key"] == save["poop_mode"])
     MAX_AMMO, POOP_COOLDOWN, RELOAD_COOLDOWN = 5, 0.28, 2.0
 
     def layout():
@@ -519,7 +538,7 @@ def play(stdscr, save, wallet, audio):
         # ---- pigeon
         drag = math.exp(-3.0 * dt)
         vx, vy = vx * drag, vy * drag
-        px = min(max(0, px + vx * dt), w - 6)
+        px = (px + vx * dt) % max(1, w - 6)
         py = min(max(3, py + vy * dt), gl - 8)
         flap += dt * (8 + abs(vx) * 0.3)
         cooldown = max(0.0, cooldown - dt)
@@ -532,10 +551,10 @@ def play(stdscr, save, wallet, audio):
         next_rock_throw = max(0.0, next_rock_throw - dt)
         difficulty_tier = max(difficulty_tier, score // DIFFICULTY_STEP)
         base_people = max(4, w // 14)
-        if score < POST_SCORE_DIFFICULTY:
-            target_people = base_people + difficulty_tier * PEOPLE_PER_DIFFICULTY
-        else:
-            target_people = base_people + (POST_SCORE_DIFFICULTY // DIFFICULTY_STEP) * PEOPLE_PER_DIFFICULTY
+        target_people = min(
+            MAX_PEOPLE,
+            base_people + difficulty_tier * PEOPLE_PER_DIFFICULTY,
+        )
         while len(people) < target_people:
             people.append(Person(w))
         if reloading and cooldown <= 0:
@@ -544,16 +563,20 @@ def play(stdscr, save, wallet, audio):
 
         if want_drop and cooldown <= 0 and not reloading:
             s = SIZES[size_i]
-            if ammo >= s["cost"]:
-                ammo -= s["cost"]
+            mode = next(m for m in POOP_MODES if m["key"] == save["poop_mode"])
+            ammo_cost = s["cost"] * mode["count"]
+            if ammo >= ammo_cost:
+                ammo -= ammo_cost
                 cooldown = POOP_COOLDOWN
-                poops.append(dict(
-                    x=px + (2.5 if face > 0 else 3.5),
-                    y=py + 2.0,
-                    vx=vx * 0.65,
-                    vy=max(2.0, vy * 0.65),
-                    size=size_i,
-                ))
+                for burst_i in range(mode["count"]):
+                    poops.append(dict(
+                        x=px + (2.5 if face > 0 else 3.5) + burst_i * face * 0.8,
+                        y=py + 2.0 - burst_i * 0.2,
+                        vx=vx * 0.65 + burst_i * face * 0.7,
+                        vy=max(2.0, vy * 0.65 - burst_i * 0.2),
+                        size=size_i,
+                    ))
+                audio.play_pack(mode["sound"], size_i)
                 if ammo <= 0:
                     reloading = True
                     cooldown = RELOAD_COOLDOWN
@@ -774,7 +797,8 @@ def play(stdscr, save, wallet, audio):
         cd_attr = (COL["red"] | curses.A_BOLD) if reloading else ((COL["yellow"] | curses.A_BOLD) if cooldown > 0 else (COL["green"] | curses.A_BOLD))
         cd_text = "RELOAD %.1fs" % cooldown if reloading else ("CD %.1fs" % cooldown if cooldown > 0 else "CD READY")
         put(stdscr, 1, 24, cd_text, cd_attr)
-        put(stdscr, 1, 38, "SIZE %s (cost %d)" % (SIZES[size_i]["name"], SIZES[size_i]["cost"]), COL["white"])
+        mode_cost = SIZES[size_i]["cost"] * mode["count"]
+        put(stdscr, 1, 38, "SIZE %s %s (cost %d)" % (SIZES[size_i]["name"], mode["name"], mode_cost), COL["white"])
         put(stdscr, 1, 62, "SOUND %s" % SOUNDS[sound_i]["name"], COL["white"])
         put(stdscr, h - 1, 1, "arrows/WASD fly   SPACE poop   1-4 size   M sound   dodge thrown rocks   Q menu", curses.A_DIM)
         stdscr.refresh()
@@ -805,7 +829,7 @@ def play(stdscr, save, wallet, audio):
 
 # --------------------------------------------------------------------------- menus
 
-def enter_code(stdscr, save):
+def enter_code(stdscr, save, wallet):
     buf, msg, ok = "", "", False
     cursor(1)
     while True:
@@ -821,7 +845,7 @@ def enter_code(stdscr, save):
         k = stdscr.getch()
         if k in (10, 13, curses.KEY_ENTER):
             if buf.strip():
-                ok, msg = redeem(save, buf)
+                ok, msg = redeem(save, wallet, buf)
             buf = ""
         elif k == 27:
             break
@@ -830,6 +854,49 @@ def enter_code(stdscr, save):
         elif 32 <= k < 127 and len(buf) < 32:
             buf += chr(k)
     cursor(0)
+
+
+def market(stdscr, save, wallet, audio):
+    row = 0
+    while True:
+        stdscr.erase()
+        h, _ = stdscr.getmaxyx()
+        cy = h // 2 - 7
+        current = next(m for m in POOP_MODES if m["key"] == save["poop_mode"])
+        center(stdscr, cy, "MARKET", COL["yellow"] | curses.A_BOLD)
+        center(stdscr, cy + 1, "Wallet: $%d" % wallet["money"], COL["green"] | curses.A_BOLD)
+        for i, mode in enumerate(POOP_MODES):
+            owned = mode["key"] in save["poop_modes"]
+            label_text = "%s %s poops - $%d - %s" % (
+                ">" if i == row else " ", mode["name"], mode["cost"],
+                "OWNED" if owned else mode["sound"].upper())
+            center(stdscr, cy + 3 + i, label_text, curses.A_BOLD if i == row else 0)
+        center(stdscr, cy + 9, "Enter = buy/use   C = redeem code   Esc = back", curses.A_DIM)
+        center(stdscr, cy + 10, "Current: %s (%d at a time)" % (current["name"], current["count"]), COL["cyan"])
+        stdscr.refresh()
+        k = stdscr.getch()
+        if k in (curses.KEY_UP, ord("k")):
+            row = (row - 1) % len(POOP_MODES)
+        elif k in (curses.KEY_DOWN, ord("j")):
+            row = (row + 1) % len(POOP_MODES)
+        elif k in (10, 13, curses.KEY_ENTER, ord(" ")):
+            selected = POOP_MODES[row]
+            if selected["key"] in save["poop_modes"]:
+                save["poop_mode"] = selected["key"]
+                write_save(save)
+                audio.play_pack(selected["sound"], size_index(save))
+            elif wallet["money"] >= selected["cost"]:
+                if selected["cost"]:
+                    wallet["money"] -= selected["cost"]
+                    write_wallet(wallet["money"])
+                save["poop_modes"].append(selected["key"])
+                save["poop_mode"] = selected["key"]
+                write_save(save)
+                audio.play_pack(selected["sound"], size_index(save))
+        elif k in (ord("c"), ord("C")):
+            enter_code(stdscr, save, wallet)
+        elif k in (27, ord("q"), ord("Q")):
+            return
 
 
 def loadout(stdscr, save, audio):
@@ -871,7 +938,7 @@ def loadout(stdscr, save, audio):
 
 
 def menu(stdscr, save, wallet, audio):
-    items = ["PLAY", "ENTER CODE", "LOADOUT", "QUIT"]
+    items = ["PLAY", "MARKET", "LOADOUT", "QUIT"]
     sel, msg = 0, ""
     while True:
         stdscr.nodelay(False)
@@ -908,7 +975,7 @@ def menu(stdscr, save, wallet, audio):
             if play(stdscr, save, wallet, audio) is None:
                 msg = "Terminal too small - need at least %dx%d" % (MIN_W, MIN_H)
         elif act == 1:
-            enter_code(stdscr, save)
+            market(stdscr, save, wallet, audio)
         elif act == 2:
             loadout(stdscr, save, audio)
         elif act == 3:
