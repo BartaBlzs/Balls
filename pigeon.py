@@ -21,9 +21,6 @@ MIN_W, MIN_H = 70, 20
 PLAYER_HP_MAX = 100
 PEOPLE_PER_DIFFICULTY = 3
 MAX_PEOPLE = 10
-GROUP_THREE_CHANCE = 0.20
-GROUP_FIVE_CHANCE = 0.15
-NEAR_PERSON_DISTANCE = 8.0
 POST_SCORE_SPEED_STEP = 0.55
 POST_SCORE_ROCK_RATE_STEP = 0.25
 TARGETED_ROCK_NOISE = 0.15
@@ -61,14 +58,12 @@ SOUNDS = [
 ]
 POOP_MODES = [
     dict(key="single", name="Single", count=1, cost=0, sound="poop"),
-    dict(key="double", name="Double", count=2, cost=1500, sound="splat"),
-    dict(key="triple", name="Triple", count=3, cost=2500, sound="squelch"),
-    dict(key="shower", name="Shower", count=5, cost=5000, sound="bomb"),
+    dict(key="double", name="Double", count=2, cost=40, sound="splat"),
+    dict(key="triple", name="Triple", count=3, cost=75, sound="squelch"),
+    dict(key="shower", name="Shower", count=5, cost=120, sound="bomb"),
 ]
-SIZE_PRICES = {"small": 1200, "medium": 2200, "large": 3500, "mega": 6000}
-SOUND_PRICES = {"poop": 1200, "splat": 1800, "squelch": 2600, "boing": 3400, "bomb": 5000}
 FREE = {"size:small", "sound:poop"}
-CODE_REDEEM_COST = 1000
+CODE_REDEEM_COST = 10
 FREE = {"size:small", "sound:poop"}
 
 # sha256 of the code (upper-cased, no spaces) -> what it unlocks.
@@ -100,9 +95,8 @@ def code_hash(raw):
 
 def load_save():
     data = {
-        "unlocked": [], "size": "small", "sound": "poop",
-        "poop_mode": "single", "poop_modes": ["single"], "respect": 0,
-        "respect_plus": 0, "best": 0,
+        "unlocked": [], "size": "small", "sound": "plop",
+        "poop_mode": "single", "poop_modes": ["single"], "best": 0,
     }
     try:
         with open(SAVE_PATH) as f:
@@ -114,31 +108,10 @@ def load_save():
         data["unlocked"] = ["sound:poop" if item == "sound:plop" else item
                             for item in data["unlocked"]]
     data["unlocked"] = sorted(set(data["unlocked"]) | FREE)
-    if data["sound"] == "plop":
-        data["sound"] = "poop"
     if data["poop_mode"] not in {mode["key"] for mode in POOP_MODES}:
         data["poop_mode"] = "single"
     data["poop_modes"] = sorted(set(data.get("poop_modes", [])) & {mode["key"] for mode in POOP_MODES} | {"single"})
-    data["respect"] = max(0, int(data.get("respect", 0)))
-    data["respect_plus"] = max(0, int(data.get("respect_plus", 0)))
     return data
-
-
-def clear_user_data(save, wallet):
-    save.clear()
-    save.update({
-        "unlocked": sorted(FREE),
-        "size": "small",
-        "sound": "poop",
-        "poop_mode": "single",
-        "poop_modes": ["single"],
-        "respect": 0,
-        "respect_plus": 0,
-        "best": 0,
-    })
-    wallet["money"] = 0
-    write_save(save)
-    write_wallet(wallet["money"])
 
 
 def write_save(save):
@@ -328,12 +301,7 @@ def init_colors():
         bg = -1
     except curses.error:
         bg = curses.COLOR_BLACK
-    try:
-        curses.init_color(8, 478, 349, 4)
-        yellow = 8
-    except curses.error:
-        yellow = curses.COLOR_YELLOW
-    cols = [curses.COLOR_WHITE, yellow, curses.COLOR_GREEN, curses.COLOR_CYAN,
+    cols = [curses.COLOR_WHITE, curses.COLOR_YELLOW, curses.COLOR_GREEN, curses.COLOR_CYAN,
             curses.COLOR_MAGENTA, curses.COLOR_RED, curses.COLOR_BLUE]
     for i, (n, c) in enumerate(zip(names, cols), 1):
         curses.init_pair(i, c, bg)
@@ -442,8 +410,6 @@ class Person:
         self.stun = 0.0
         self.dead = 0.0
         self.throws_rocks = getattr(self, "throws_rocks", False)
-        self.group_id = getattr(self, "group_id", None)
-        self.group_size = getattr(self, "group_size", 1)
         self.shout = ""
         self.anim = random.random() * 10
 
@@ -479,19 +445,6 @@ def play(stdscr, save, wallet, audio):
     gl, bg, clouds = 0, [], []
     layout()
     people = [Person(w) for _ in range(max(4, w // 14))]
-    next_group_id = 0
-    index = 0
-    while index < len(people):
-        roll = random.random()
-        group_size = 5 if roll < GROUP_FIVE_CHANCE else (3 if roll < GROUP_FIVE_CHANCE + GROUP_THREE_CHANCE else 1)
-        group_size = min(group_size, len(people) - index)
-        group_id = next_group_id
-        next_group_id += 1
-        for offset, person in enumerate(people[index:index + group_size]):
-            person.group_id = group_id
-            person.group_size = group_size
-            person.x = min(w - 3.0, max(0.0, w / 2 + (offset - (group_size - 1) / 2) * 3.0))
-        index += group_size
     poops, rocks, particles, splats, floaters = [], [], [], [], []
     px, py, vx, vy, face, flap = w / 2, 4.0, 0.0, 0.0, 1, 0.0
     ammo, cooldown, score = MAX_AMMO, 0.0, 0
@@ -503,10 +456,6 @@ def play(stdscr, save, wallet, audio):
     hurt_iframes = 0.0
     hit_notice = 0.0
     reward_flash = 0.0
-    announcement = ""
-    announcement_time = 0.0
-    last_level = score_difficulty(score)[1]
-    near_people = False
     reward_tier = 0
     rock_salvo_remaining = 0
     rock_throw_queue = []
@@ -559,14 +508,9 @@ def play(stdscr, save, wallet, audio):
         hurt_iframes = max(0.0, hurt_iframes - dt)
         hit_notice = max(0.0, hit_notice - dt)
         reward_flash = max(0.0, reward_flash - dt)
-        announcement_time = max(0.0, announcement_time - dt)
         rock_salvo_cooldown = max(0.0, rock_salvo_cooldown - dt)
         next_rock_throw = max(0.0, next_rock_throw - dt)
         difficulty_name, difficulty_tier = score_difficulty(score)
-        if difficulty_tier != last_level:
-            last_level = difficulty_tier
-            announcement = "LEVEL UP: " + difficulty_name
-            announcement_time = 2.0
         base_people = max(4, w // 14)
         target_people = min(
             MAX_PEOPLE,
@@ -621,20 +565,7 @@ def play(stdscr, save, wallet, audio):
             if p.x > w + 1 or p.x < -4:
                 p.respawn(w, edge=-p.dir)
 
-        closest = min(
-            (min(abs((p.x + 1.5) - (px + 2.5)),
-                 w - abs((p.x + 1.5) - (px + 2.5)))
-             for p in people if p.dead <= 0),
-            default=float("inf"),
-        )
-        close_now = closest <= NEAR_PERSON_DISTANCE
-        if close_now and not near_people:
-            announcement = "CLOSE TO PEOPLE: 2X POINTS!"
-            announcement_time = 1.5
-        near_people = close_now
-
         # ---- poops
-        kills_this_moment = 0
         for poop in poops[:]:
             previous_x, previous_y = poop["x"], poop["y"]
             poop["vy"] = min(POOP_MAX_SPEED, poop["vy"] + POOP_GRAVITY * dt)
@@ -645,7 +576,7 @@ def play(stdscr, save, wallet, audio):
             s = SIZES[poop["size"]]
             hit = None
             for p in people:
-                if p.dead > 0 or p.stun > 0:
+                if p.dead > 0:
                     continue
                 # Expand the whole person sprite by the poop radius and use
                 # the previous/current positions to prevent fast-falling hits
@@ -663,48 +594,25 @@ def play(stdscr, save, wallet, audio):
                     particles.append([poop["x"], min(poop["y"], gl - 2), random.uniform(-12, 12),
                                       random.uniform(-14, -3), 0.5, random.choice(".,*'`")])
                 if hit:
-                    victims = [hit]
-                    if hit.group_size in (3, 5) and hit.group_id is not None:
-                        victims.extend(
-                            person for person in people
-                            if person is not hit and person.dead <= 0
-                            and person.group_id == hit.group_id
-                        )
-                    for victim in victims:
-                        kills_this_moment += 1
-                        distance = min(abs((victim.x + 1.5) - (px + 2.5)),
-                                       w - abs((victim.x + 1.5) - (px + 2.5)))
-                        proximity_mult = 2 if distance <= NEAR_PERSON_DISTANCE else 1
-                        gained = s["pts"] * Person.KINDS[victim.kind]["mult"] * proximity_mult
-                        score += gained
-                        new_tier = score // 30
-                        if new_tier > reward_tier:
-                            bonus = (new_tier - reward_tier) * 5
-                            reward_tier = new_tier
-                            wallet["money"] += bonus
-                            write_wallet(wallet["money"])
-                            reward_flash = 1.5
-                            floaters.append([px + 1, max(2.0, py - 1.0), "+$%d" % bonus, 1.1])
-                        floaters.append([victim.x + 1, gl - 5.0, "+%d" % gained, 1.0])
-                        victim.shout = random.choice(VIP_SHOUTS if victim.kind == "vip" else SHOUTS)
-                        victim.throws_rocks = True
-                        rock_throw_queue.append(victim)
-                        victim.stun = PERSON_DEATH_TIME
+                    gained = s["pts"] * Person.KINDS[hit.kind]["mult"]
+                    score += gained
+                    new_tier = score // 30
+                    if new_tier > reward_tier:
+                        bonus = (new_tier - reward_tier) * 5
+                        reward_tier = new_tier
+                        wallet["money"] += bonus
+                        write_wallet(wallet["money"])
+                        reward_flash = 1.5
+                        floaters.append([px + 1, max(2.0, py - 1.0), "+$%d" % bonus, 1.1])
+                    floaters.append([hit.x + 1, gl - 5.0, "+%d" % gained, 1.0])
+                    hit.shout = random.choice(VIP_SHOUTS if hit.kind == "vip" else SHOUTS)
+                    hit.throws_rocks = True
+                    rock_throw_queue.append(hit)
                     rock_salvo_pending = True
                     retaliation_banner = 3.0
+                    hit.stun = PERSON_DEATH_TIME
                 else:
                     splats.append([poop["x"], s["splat"], 4.0])
-
-        if kills_this_moment >= 5:
-            save["respect_plus"] += 1
-            write_save(save)
-            announcement = "AMAZING! FIVE HIT! RESPECT+ +1"
-            announcement_time = 2.5
-        elif kills_this_moment >= 3:
-            save["respect"] += 1
-            write_save(save)
-            announcement = "GOOD JOB! TRIPLE HIT! RESPECT +1"
-            announcement_time = 2.5
 
         if rock_salvo_pending and rock_salvo_remaining == 0 and rock_salvo_cooldown <= 0:
             if rock_throw_queue:
@@ -832,25 +740,23 @@ def play(stdscr, save, wallet, audio):
             put(stdscr, max(2, int(py) - 1), int(px) - 2, "-10 HP  -10 SCORE", COL["red"] | curses.A_BOLD)
 
         put(stdscr, 0, 1, "SCORE %05d" % score, COL["yellow"] | curses.A_BOLD)
-        put(stdscr, 0, 16, "LV %d" % (difficulty_tier + 1), COL["magenta"] | curses.A_BOLD)
-        put(stdscr, 0, 24, difficulty_name[:14], COL["magenta"] | curses.A_BOLD)
+        put(stdscr, 0, 16, difficulty_name, COL["magenta"] | curses.A_BOLD)
         hp_attr = (COL["red"] | curses.A_BOLD) if player_hp <= ROCK_HIT_DAMAGE else (COL["green"] | curses.A_BOLD)
-        put(stdscr, 0, 41, "HP %03d" % player_hp, hp_attr)
-        put(stdscr, 0, 51, "TIME %03d" % math.ceil(left), COL["white"] | curses.A_BOLD)
+        put(stdscr, 0, max(1, w // 2 - 5), "HP %03d" % player_hp, hp_attr)
+        put(stdscr, 0, max(30, w - 26), "MONEY $%d" % wallet["money"], COL["green"] | curses.A_BOLD)
+        put(stdscr, 0, w - 12, "TIME %3d" % math.ceil(left), COL["white"] | curses.A_BOLD)
         if retaliation_banner > 0:
             center(stdscr, 2, "POOPED PEOPLE ARE THROWING ROCKS - DODGE!", COL["red"] | curses.A_BOLD)
-        if announcement_time > 0:
-            center(stdscr, 3, announcement, COL["yellow"] | curses.A_BOLD)
         if reward_flash > 0:
-            center(stdscr, 4, "+$5 every 30 score!", COL["green"] | curses.A_BOLD)
+            center(stdscr, 3, "+$5 every 30 score!", COL["green"] | curses.A_BOLD)
         bar = int(ammo / MAX_AMMO * 12)
         ammo_attr = COL["red"] | curses.A_BOLD if no_ammo_flash > 0 else COL["cyan"]
-        put(stdscr, 1, 1, "AMMO [%s%s]" % ("#" * bar, "-" * (12 - bar)), ammo_attr)
+        put(stdscr, 1, 1, "SHITTING [%s%s]" % ("#" * bar, "-" * (12 - bar)), ammo_attr)
         cd_attr = (COL["red"] | curses.A_BOLD) if reloading else ((COL["yellow"] | curses.A_BOLD) if cooldown > 0 else (COL["green"] | curses.A_BOLD))
         cd_text = "RELOAD %.1fs" % cooldown if reloading else ("CD %.1fs" % cooldown if cooldown > 0 else "CD READY")
-        put(stdscr, 1, 18, cd_text, cd_attr)
-        put(stdscr, 1, 34, "RESPECT %d  RESPECT+ %d" %
-            (save["respect"], save["respect_plus"]), COL["red"] | curses.A_BOLD)
+        put(stdscr, 1, 24, cd_text, cd_attr)
+        mode_cost = SIZES[size_i]["cost"] * mode["count"]
+        put(stdscr, 1, 38, "%s (cost %d)" % (mode["name"], mode_cost), COL["white"])
         put(stdscr, h - 1, 1, "arrows/WASD fly   SPACE poop   Q menu", curses.A_DIM)
         stdscr.refresh()
 
@@ -909,139 +815,87 @@ def enter_code(stdscr, save, wallet):
 
 def market(stdscr, save, wallet, audio):
     row = 0
-    size_i, sound_i = size_index(save), sound_index(save)
     while True:
         stdscr.erase()
         h, _ = stdscr.getmaxyx()
-        cy = h // 2 - 8
+        cy = h // 2 - 7
         current = next(m for m in POOP_MODES if m["key"] == save["poop_mode"])
         center(stdscr, cy, "MARKET", COL["yellow"] | curses.A_BOLD)
-        center(stdscr, cy + 1, "Wallet: $%d   Respect: %d   Respect+: %d" %
-               (wallet["money"], save["respect"], save["respect_plus"]),
-               COL["green"] | curses.A_BOLD)
-        rows = [
-            ("SIZE", SIZES[size_i]["name"], size_i in owned_sizes(save), SIZE_PRICES[SIZES[size_i]["key"]]),
-            ("SOUND", SOUNDS[sound_i]["name"], sound_i in owned_sounds(save), SOUND_PRICES[SOUNDS[sound_i]["key"]]),
-        ] + [
-            ("AMOUNT", mode["name"], mode["key"] in save["poop_modes"], mode["cost"])
-            for mode in POOP_MODES
-        ]
-        rows.extend([
-            ("RESPECT", "Cheapest random", save["respect"] > 0, 1),
-            ("RESPECT+", "Premium random", save["respect_plus"] > 0, 1),
-        ])
-        for i, (kind, value, owned, price) in enumerate(rows):
-            label_text = "%s %s: %s - %s" % (
-                ">" if i == row else " ", kind, value, "OWNED" if owned else "$%d" % price)
+        center(stdscr, cy + 1, "Wallet: $%d" % wallet["money"], COL["green"] | curses.A_BOLD)
+        for i, mode in enumerate(POOP_MODES):
+            owned = mode["key"] in save["poop_modes"]
+            label_text = "%s %s poops - $%d - %s" % (
+                ">" if i == row else " ", mode["name"], mode["cost"],
+                "OWNED" if owned else mode["sound"].upper())
             center(stdscr, cy + 3 + i, label_text, curses.A_BOLD if i == row else 0)
-        center(stdscr, cy + 10, "Left/right select   Enter buy/use   C redeem   Esc back", curses.A_DIM)
-        center(stdscr, cy + 11, "Current: %s (%d at a time)" % (current["name"], current["count"]), COL["cyan"])
+        center(stdscr, cy + 9, "Enter = buy/use   C = redeem code   Esc = back", curses.A_DIM)
+        center(stdscr, cy + 10, "Current: %s (%d at a time)" % (current["name"], current["count"]), COL["cyan"])
         stdscr.refresh()
         k = stdscr.getch()
         if k in (curses.KEY_UP, ord("k")):
-            row = (row - 1) % len(rows)
+            row = (row - 1) % len(POOP_MODES)
         elif k in (curses.KEY_DOWN, ord("j")):
-            row = (row + 1) % len(rows)
-        elif k in (curses.KEY_LEFT, curses.KEY_RIGHT, ord("h"), ord("l")):
-            step = -1 if k in (curses.KEY_LEFT, ord("h")) else 1
-            if row == 0:
-                size_i = (size_i + step) % len(SIZES)
-            elif row == 1:
-                sound_i = (sound_i + step) % len(SOUNDS)
-            elif row < 2 + len(POOP_MODES):
-                amount_row = row - 2
-                row = 2 + (amount_row + step) % len(POOP_MODES)
+            row = (row + 1) % len(POOP_MODES)
         elif k in (10, 13, curses.KEY_ENTER, ord(" ")):
-            if row == 0:
-                item, owned, price = SIZES[size_i], size_i in owned_sizes(save), SIZE_PRICES[SIZES[size_i]["key"]]
-                if owned or wallet["money"] >= price:
-                    if not owned:
-                        wallet["money"] -= price
-                        write_wallet(wallet["money"])
-                        save["unlocked"].append("size:" + item["key"])
-                    save["size"] = item["key"]
-                    write_save(save)
-            elif row == 1:
-                item, owned, price = SOUNDS[sound_i], sound_i in owned_sounds(save), SOUND_PRICES[SOUNDS[sound_i]["key"]]
-                if owned or wallet["money"] >= price:
-                    if not owned:
-                        wallet["money"] -= price
-                        write_wallet(wallet["money"])
-                        save["unlocked"].append("sound:" + item["key"])
-                    save["sound"] = item["key"]
-                    write_save(save)
-                    audio.play(sound_i, size_i)
-            elif row < 2 + len(POOP_MODES):
-                selected = POOP_MODES[row - 2]
-                if selected["key"] in save["poop_modes"] or wallet["money"] >= selected["cost"]:
-                    if selected["key"] not in save["poop_modes"]:
-                        wallet["money"] -= selected["cost"]
-                        write_wallet(wallet["money"])
-                        save["poop_modes"].append(selected["key"])
-                    save["poop_mode"] = selected["key"]
-                    write_save(save)
-                    audio.play_pack(selected["sound"], size_i)
-            elif row < 2 + len(POOP_MODES) + 1 and save["respect"] > 0:
-                owned_size_keys = set(save["unlocked"])
-                candidates = [
-                    ("size", item, SIZE_PRICES[item["key"]])
-                    for item in SIZES if "size:" + item["key"] not in owned_size_keys
-                ] + [
-                    ("sound", item, SOUND_PRICES[item["key"]])
-                    for item in SOUNDS if "sound:" + item["key"] not in owned_size_keys
-                ] + [
-                    ("amount", item, item["cost"])
-                    for item in POOP_MODES if item["key"] not in save["poop_modes"]
-                ]
-                if candidates:
-                    cheapest = min(candidate[2] for candidate in candidates)
-                    kind, item, _ = random.choice(
-                        [candidate for candidate in candidates if candidate[2] == cheapest])
-                    save["respect"] -= 1
-                    if kind == "size":
-                        save["unlocked"].append("size:" + item["key"])
-                        save["size"] = item["key"]
-                    elif kind == "sound":
-                        save["unlocked"].append("sound:" + item["key"])
-                        save["sound"] = item["key"]
-                    else:
-                        save["poop_modes"].append(item["key"])
-                        save["poop_mode"] = item["key"]
-                    write_save(save)
-            elif save["respect_plus"] > 0:
-                owned_keys = set(save["unlocked"])
-                candidates = [
-                    ("size", item, SIZE_PRICES[item["key"]])
-                    for item in SIZES if "size:" + item["key"] not in owned_keys
-                ] + [
-                    ("sound", item, SOUND_PRICES[item["key"]])
-                    for item in SOUNDS if "sound:" + item["key"] not in owned_keys
-                ] + [
-                    ("amount", item, item["cost"])
-                    for item in POOP_MODES if item["key"] not in save["poop_modes"]
-                ]
-                premium = [candidate for candidate in candidates if candidate[2] > 2000] or candidates
-                if premium:
-                    kind, item, _ = random.choice(premium)
-                    save["respect_plus"] -= 1
-                    if kind == "size":
-                        save["unlocked"].append("size:" + item["key"])
-                        save["size"] = item["key"]
-                    elif kind == "sound":
-                        save["unlocked"].append("sound:" + item["key"])
-                        save["sound"] = item["key"]
-                    else:
-                        save["poop_modes"].append(item["key"])
-                        save["poop_mode"] = item["key"]
-                    write_save(save)
+            selected = POOP_MODES[row]
+            if selected["key"] in save["poop_modes"]:
+                save["poop_mode"] = selected["key"]
+                write_save(save)
+                audio.play_pack(selected["sound"], size_index(save))
+            elif wallet["money"] >= selected["cost"]:
+                if selected["cost"]:
+                    wallet["money"] -= selected["cost"]
+                    write_wallet(wallet["money"])
+                save["poop_modes"].append(selected["key"])
+                save["poop_mode"] = selected["key"]
+                write_save(save)
+                audio.play_pack(selected["sound"], size_index(save))
         elif k in (ord("c"), ord("C")):
             enter_code(stdscr, save, wallet)
         elif k in (27, ord("q"), ord("Q")):
             return
 
 
+def loadout(stdscr, save, audio):
+    row = 0
+    while True:
+        os_, ou = owned_sizes(save), owned_sounds(save)
+        si, so = size_index(save), sound_index(save)
+        stdscr.erase()
+        h, _ = stdscr.getmaxyx()
+        cy = h // 2 - 5
+        center(stdscr, cy, "LOADOUT", COL["yellow"] | curses.A_BOLD)
+        rows = [("Poop size ", SIZES[si]["name"]), ("Poop sound", SOUNDS[so]["name"])]
+        for i, (lab, val) in enumerate(rows):
+            text = "%s %s: <  %s  >" % (">" if i == row else " ", lab, val)
+            center(stdscr, cy + 2 + i * 2, text, curses.A_BOLD if i == row else 0)
+        sizes_line = "Sizes:  " + "   ".join(
+            s["name"] + ("" if i in os_ else " (locked)") for i, s in enumerate(SIZES))
+        sounds_line = "Sounds: " + "   ".join(
+            s["name"] + ("" if i in ou else " (locked)") for i, s in enumerate(SOUNDS))
+        center(stdscr, cy + 7, sizes_line, curses.A_DIM)
+        center(stdscr, cy + 8, sounds_line, curses.A_DIM)
+        center(stdscr, cy + 10, "up/down pick   left/right change   Enter = preview sound   Esc = back", curses.A_DIM)
+        stdscr.refresh()
+        k = stdscr.getch()
+        if k in (curses.KEY_UP, curses.KEY_DOWN, ord("k"), ord("j")):
+            row = 1 - row
+        elif k in (curses.KEY_LEFT, curses.KEY_RIGHT, ord("h"), ord("l")):
+            d = -1 if k in (curses.KEY_LEFT, ord("h")) else 1
+            if row == 0:
+                save["size"] = SIZES[os_[(os_.index(si) + d) % len(os_)]]["key"]
+            else:
+                save["sound"] = SOUNDS[ou[(ou.index(so) + d) % len(ou)]]["key"]
+            write_save(save)
+            audio.play(sound_index(save), size_index(save))
+        elif k in (10, 13, curses.KEY_ENTER, ord(" ")):
+            audio.play(so, si)
+        elif k in (27, ord("q")):
+            return
+
+
 def menu(stdscr, save, wallet, audio):
-    items = ["PLAY", "MARKET", "QUIT"]
+    items = ["PLAY", "MARKET", "LOADOUT", "QUIT"]
     sel, msg = 0, ""
     while True:
         stdscr.nodelay(False)
@@ -1052,7 +906,7 @@ def menu(stdscr, save, wallet, audio):
         top = max(1, h // 2 - 8)
         for i, line in enumerate(TITLE):
             center(stdscr, top + i, line, COL["white"] | curses.A_BOLD)
-        center(stdscr, top + len(TITLE) + 1, "shit on people.", curses.A_DIM)
+        center(stdscr, top + len(TITLE) + 1, "poop on people. sell codes. profit.", curses.A_DIM)
         for i, it in enumerate(items):
             text = ("> %s <" % it) if i == sel else it
             center(stdscr, top + 8 + i * 2, text, (COL["yellow"] | curses.A_BOLD) if i == sel else 0)
@@ -1069,7 +923,7 @@ def menu(stdscr, save, wallet, audio):
             sel = (sel + 1) % len(items)
         elif k in (10, 13, curses.KEY_ENTER):
             act = sel
-        elif ord("1") <= k <= ord("3"):
+        elif ord("1") <= k <= ord("4"):
             act = k - ord("1")
         elif k in (ord("q"), ord("Q"), 27):
             return
@@ -1080,6 +934,8 @@ def menu(stdscr, save, wallet, audio):
         elif act == 1:
             market(stdscr, save, wallet, audio)
         elif act == 2:
+            loadout(stdscr, save, audio)
+        elif act == 3:
             return
 
 
