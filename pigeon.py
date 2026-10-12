@@ -431,27 +431,45 @@ def score_difficulty(score):
     return "EASY", 0
 
 
-def make_skyline(w, h, gl):
+def make_street(w, h, gl):
     grid = [[" "] * w for _ in range(h)]
-    rng = random.Random(7)
+    rng = random.Random()
+
+    def paint(x, y, char):
+        if 0 <= x < w and 0 <= y < h:
+            grid[y][x] = char
+
     x = 0
     while x < w:
-        bw = rng.randint(7, 14)
-        bh = rng.randint(4, max(5, gl - 6))
-        for r in range(bh):
-            y = gl - 1 - r
-            for cx in (x, x + bw - 1):
-                if 0 <= cx < w and y >= 0:
-                    grid[y][cx] = "|"
-            if r == bh - 1:
-                for cx in range(x + 1, x + bw - 1):
-                    if 0 <= cx < w and y >= 0:
-                        grid[y][cx] = "_"
-            elif r % 2 == 1:
-                for cx in range(x + 2, x + bw - 2, 3):
-                    if 0 <= cx < w and y >= 0 and rng.random() < 0.6:
-                        grid[y][cx] = "#"
-        x += bw + rng.randint(0, 2)
+        width = rng.randint(8, 15)
+        top = rng.randint(max(2, gl // 5), max(3, gl - 8))
+        wall = rng.choice(("|", ":", "#", "+"))
+        roof = rng.choice(("_", "=", "~"))
+
+        for y in range(top, gl - 1):
+            paint(x, y, wall)
+            paint(x + width - 1, y, wall)
+            if y == top:
+                for cx in range(x + 1, x + width - 1):
+                    paint(cx, y, roof)
+            elif y % 2 == top % 2:
+                for cx in range(x + 2, x + width - 2, 4):
+                    if rng.random() < 0.75:
+                        paint(cx, y, "o")
+                        if cx + 1 < x + width - 1:
+                            paint(cx + 1, y, "o")
+
+        door_x = x + max(1, width // 2 - 1)
+        paint(door_x, gl - 2, "[")
+        paint(door_x + 1, gl - 2, "]")
+        if rng.random() < 0.45:
+            for cx in range(x + 1, x + width - 1, 2):
+                paint(cx, gl - 3, "^")
+
+        x += width + rng.randint(1, 3)
+
+    for x in range(w):
+        paint(x, gl - 1, "." if x % 2 else "_")
     return ["".join(row) for row in grid]
 
 # --------------------------------------------------------------------------- game
@@ -510,7 +528,7 @@ def play(stdscr, save, wallet, audio):
         nonlocal h, w, gl, bg, clouds
         h, w = stdscr.getmaxyx()
         gl = h - 2
-        bg = make_skyline(w, h, gl)
+        bg = make_street(w, h, gl)
         clouds = [[random.uniform(0, w), random.randint(3, max(3, gl // 3)), random.uniform(0.8, 2.0)]
                   for _ in range(max(3, w // 25))]
 
