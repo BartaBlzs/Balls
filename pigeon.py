@@ -679,7 +679,8 @@ def play(stdscr, save, wallet, audio):
     stdscr.timeout(-1)
     stdscr.erase()
     cy = h // 2 - 3
-    center(stdscr, cy, "YOU DIED!" if died else "TIME'S UP!", COL["red"] | curses.A_BOLD if died else COL["yellow"] | curses.A_BOLD)
+    result_attr = (COL["red"] | curses.A_BOLD) if died else (COL["yellow"] | curses.A_BOLD)
+    center(stdscr, cy, "YOU DIED!" if died else "TIME'S UP!", result_attr)
     center(stdscr, cy + 2, "You hit people for %d points" % score, COL["white"])
     center(stdscr, cy + 3, "NEW BEST!" if new_best else "Best: %d" % save["best"], COL["magenta"] | curses.A_BOLD)
     center(stdscr, cy + 4, "Wallet: $%d" % wallet["money"], COL["green"] | curses.A_BOLD)
