@@ -78,6 +78,8 @@ SIZE_PRICES = {"small": 1200, "medium": 2200, "large": 3500, "mega": 6000}
 SOUND_PRICES = {"fart": 1200, "splat": 1800, "squelch": 2600, "boing": 3400, "bomb": 5000}
 FREE = {"size:small", "sound:fart"}
 CODE_REDEEM_COST = 1000
+ADMIN_WALLET_AMOUNT = 999999999
+ADMIN_CODE_HASH = "395fcfb4f94a19b6242902470f4c80cca48eed86fdd65e60c2325339066a9edd"
 
 # sha256 of the code (upper-cased, no spaces) -> what it unlocks.
 CODES = {
@@ -112,6 +114,7 @@ def load_save():
         "unlocked": [], "size": "small", "sound": "poop",
         "poop_mode": "single", "poop_modes": ["single"],
         "respect": 0, "respect_plus": 0, "best": 0,
+        "admin_unlimited": False,
     }
     data = defaults.copy()
     try:
@@ -158,6 +161,7 @@ def load_save():
             data[key] = max(0, int(data.get(key, 0)))
         except (ValueError, TypeError, OverflowError):
             data[key] = 0
+    data["admin_unlimited"] = bool(data.get("admin_unlimited", False))
     return data
 
 
@@ -172,6 +176,7 @@ def clear_user_data(save, wallet):
         "respect": 0,
         "respect_plus": 0,
         "best": 0,
+        "admin_unlimited": False,
     })
     wallet["money"] = 0
     write_save(save)
@@ -214,6 +219,20 @@ def write_wallet(money):
         pass
 
 
+def wallet_display(save, wallet):
+    return "UNLIMITED" if save.get("admin_unlimited", False) else "$%d" % wallet["money"]
+
+
+def can_afford(save, wallet, price):
+    return save.get("admin_unlimited", False) or wallet["money"] >= price
+
+
+def spend_wallet(save, wallet, price):
+    if not save.get("admin_unlimited", False):
+        wallet["money"] -= price
+        write_wallet(wallet["money"])
+
+
 def label(unlock_id):
     kind, key = unlock_id.split(":")
     if kind == "size":
@@ -222,16 +241,23 @@ def label(unlock_id):
 
 
 def redeem(save, wallet, raw):
-    unlocks = CODES.get(code_hash(raw))
+    hashed = code_hash(raw)
+    if hashed == ADMIN_CODE_HASH:
+        save["admin_unlimited"] = True
+        wallet["money"] = ADMIN_WALLET_AMOUNT
+        write_save(save)
+        write_wallet(wallet["money"])
+        return True, "Admin mode enabled: unlimited money."
+
+    unlocks = CODES.get(hashed)
     if not unlocks:
         return False, "Invalid code."
     new = [u for u in unlocks if u not in save["unlocked"]]
     if not new:
         return False, "You already redeemed that code."
-    if wallet["money"] < CODE_REDEEM_COST:
+    if not save.get("admin_unlimited", False) and wallet["money"] < CODE_REDEEM_COST:
         return False, "Need $%d to redeem a code." % CODE_REDEEM_COST
-    wallet["money"] -= CODE_REDEEM_COST
-    write_wallet(wallet["money"])
+    spend_wallet(save, wallet, CODE_REDEEM_COST)
     save["unlocked"] = sorted(set(save["unlocked"]) | set(new))
     write_save(save)
     return True, "Unlocked: " + ", ".join(label(u) for u in new)
@@ -531,7 +557,9 @@ def play(stdscr, save, wallet, audio):
 
     while True:
         now = time.perf_counter()
-        dt = 0.0 if start is None else min(0.1, now - last)
+        # The scene keeps moving while the round clock waits for the first
+        # poop.  Once the shot is fired, the same real-time delta drives both.
+        dt = min(0.1, now - last)
         last = now
         left = ROUND_SECS if start is None else ROUND_SECS - (now - start)
         if left <= 0:
@@ -914,7 +942,7 @@ def play(stdscr, save, wallet, audio):
     center(stdscr, cy, "YOU DIED!" if died else "TIME'S UP!", result_attr)
     center(stdscr, cy + 2, "You hit people for %d points" % score, COL["white"])
     center(stdscr, cy + 3, "NEW BEST!" if new_best else "Best: %d" % save["best"], COL["magenta"] | curses.A_BOLD)
-    center(stdscr, cy + 4, "Wallet: $%d" % wallet["money"], COL["green"] | curses.A_BOLD)
+    center(stdscr, cy + 4, "Wallet: %s" % wallet_display(save, wallet), COL["green"] | curses.A_BOLD)
     center(stdscr, cy + 5, "press any key", curses.A_DIM)
     stdscr.refresh()
     time.sleep(0.6)
@@ -960,8 +988,8 @@ def market(stdscr, save, wallet, audio):
         cy = h // 2 - 8
         current = next(m for m in POOP_MODES if m["key"] == save["poop_mode"])
         center(stdscr, cy, "MARKET", COL["yellow"] | curses.A_BOLD)
-        center(stdscr, cy + 1, "Wallet: $%d   Respect: %d   Respect+: %d" %
-               (wallet["money"], save["respect"], save["respect_plus"]),
+        center(stdscr, cy + 1, "Wallet: %s   Respect: %d   Respect+: %d" %
+               (wallet_display(save, wallet), save["respect"], save["respect_plus"]),
                COL["green"] | curses.A_BOLD)
         rows = [
             ("SIZE", SIZES[size_i]["name"], size_i in owned_sizes(save), SIZE_PRICES[SIZES[size_i]["key"]]),
@@ -998,29 +1026,26 @@ def market(stdscr, save, wallet, audio):
         elif k in (10, 13, curses.KEY_ENTER, ord(" ")):
             if row == 0:
                 item, owned, price = SIZES[size_i], size_i in owned_sizes(save), SIZE_PRICES[SIZES[size_i]["key"]]
-                if owned or wallet["money"] >= price:
+                if owned or can_afford(save, wallet, price):
                     if not owned:
-                        wallet["money"] -= price
-                        write_wallet(wallet["money"])
+                        spend_wallet(save, wallet, price)
                         save["unlocked"].append("size:" + item["key"])
                     save["size"] = item["key"]
                     write_save(save)
             elif row == 1:
                 item, owned, price = SOUNDS[sound_i], sound_i in owned_sounds(save), SOUND_PRICES[SOUNDS[sound_i]["key"]]
-                if owned or wallet["money"] >= price:
+                if owned or can_afford(save, wallet, price):
                     if not owned:
-                        wallet["money"] -= price
-                        write_wallet(wallet["money"])
+                        spend_wallet(save, wallet, price)
                         save["unlocked"].append("sound:" + item["key"])
                     save["sound"] = item["key"]
                     write_save(save)
                     audio.play(sound_i, size_i)
             elif row < 2 + len(POOP_MODES):
                 selected = POOP_MODES[row - 2]
-                if selected["key"] in save["poop_modes"] or wallet["money"] >= selected["cost"]:
+                if selected["key"] in save["poop_modes"] or can_afford(save, wallet, selected["cost"]):
                     if selected["key"] not in save["poop_modes"]:
-                        wallet["money"] -= selected["cost"]
-                        write_wallet(wallet["money"])
+                        spend_wallet(save, wallet, selected["cost"])
                         save["poop_modes"].append(selected["key"])
                     save["poop_mode"] = selected["key"]
                     write_save(save)
@@ -1122,7 +1147,7 @@ def menu(stdscr, save, wallet, audio):
             center(stdscr, top + 8 + i * 2, text, (COL["yellow"] | curses.A_BOLD) if i == sel else 0)
         if msg:
             center(stdscr, top + 17, msg, COL["red"] | curses.A_BOLD)
-        center(stdscr, top + 19, "Best: %d   Wallet: $%d" % (save["best"], wallet["money"]), COL["magenta"])
+        center(stdscr, top + 19, "Best: %d   Wallet: %s" % (save["best"], wallet_display(save, wallet)), COL["magenta"])
         stdscr.refresh()
 
         k = stdscr.getch()
@@ -1152,7 +1177,7 @@ def menu(stdscr, save, wallet, audio):
 def main(stdscr):
     init_colors()
     save = load_save()
-    wallet = {"money": load_wallet()}
+    wallet = {"money": ADMIN_WALLET_AMOUNT if save.get("admin_unlimited") else load_wallet()}
     write_wallet(wallet["money"])
     audio = Audio()
     try:
