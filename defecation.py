@@ -1002,7 +1002,7 @@ def enter_code(stdscr, save, wallet):
     cursor(1)
     while True:
         stdscr.erase()
-        h, _ = stdscr.getmaxyx()
+        h, w = stdscr.getmaxyx()
         cy = h // 2 - 3
         center(stdscr, cy, "ENTER YOUR CODE", COL["yellow"] | curses.A_BOLD)
         center(stdscr, cy + 2, "> " + buf + "_")
@@ -1129,16 +1129,27 @@ def menu(stdscr, save, wallet, audio):
         stdscr.timeout(-1)
         cursor(0)
         stdscr.erase()
-        h, _ = stdscr.getmaxyx()
+        h, w = stdscr.getmaxyx()
         top = max(0, h // 2 - 10)
         for i, line in enumerate(TITLE):
             center(stdscr, top + i, line, COL["white"] | curses.A_BOLD)
         center(stdscr, top + len(TITLE) + 1, "shit on people.", curses.A_DIM)
-        for i, it in enumerate(items):
-            if i == 2:
-                it = "AUDIO: MUTED" if audio.menu_muted else "AUDIO: %d%%" % round(audio.menu_volume * 100)
-            text = ("> %s <" % it) if i == sel else it
+        labels = items[:]
+        labels[2] = "AUDIO: MUTED" if audio.menu_muted else "AUDIO: %d%%" % round(audio.menu_volume * 100)
+        for i in range(2):
+            text = ("> %s <" % labels[i]) if i == sel else labels[i]
             center(stdscr, top + 8 + i * 2, text, (COL["yellow"] | curses.A_BOLD) if i == sel else 0)
+        row_labels = []
+        for i in range(2, 5):
+            text = ("> %s <" % labels[i]) if i == sel else labels[i]
+            row_labels.append(text)
+        row_gap = 4
+        row_width = sum(len(text) for text in row_labels) + row_gap * (len(row_labels) - 1)
+        row_x = max(0, (w - row_width) // 2)
+        for text in row_labels:
+            put(stdscr, top + 12, row_x, text,
+                (COL["yellow"] | curses.A_BOLD) if text.startswith("> ") else 0)
+            row_x += len(text) + row_gap
         if msg:
             center(stdscr, top + 18, msg, COL["red"] | curses.A_BOLD)
         elif sel == 2:
