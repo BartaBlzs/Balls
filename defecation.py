@@ -62,20 +62,18 @@ SIZES = [
     dict(key="mega",   name="MEGA",   glyph="(@@@)",  splat="~~(@@@)~~",  cost=8, pts=150, hw=3),
 ]
 SOUNDS = [
-    dict(key="fart",    name="Poop",    file="fart.mp3"),
-    dict(key="splat",   name="Splat",   file="splat.mp3"),
-    dict(key="squelch", name="Squelch", file="squelch.mp3"),
-    dict(key="boing",   name="Boing",   file="boing.mp3"),
-    dict(key="bomb",    name="Bomb",    file="bomb.mp3"),
+    dict(key="fart",  name="Fart",   file="fart.mp3"),
+    dict(key="fart1", name="Fart 1", file="fart1.mp3"),
+    dict(key="fart2", name="Fart 2", file="fart2.mp3"),
 ]
 POOP_MODES = [
     dict(key="single", name="Single", count=1, cost=0, sound="fart"),
-    dict(key="double", name="Double", count=2, cost=1500, sound="splat"),
-    dict(key="triple", name="Triple", count=3, cost=2500, sound="squelch"),
-    dict(key="shower", name="Shower", count=5, cost=5000, sound="bomb"),
+    dict(key="double", name="Double", count=2, cost=1500, sound="fart1"),
+    dict(key="triple", name="Triple", count=3, cost=2500, sound="fart2"),
+    dict(key="shower", name="Shower", count=5, cost=5000, sound="fart2"),
 ]
 SIZE_PRICES = {"small": 1200, "medium": 2200, "large": 3500, "mega": 6000}
-SOUND_PRICES = {"fart": 1200, "splat": 1800, "squelch": 2600, "boing": 3400, "bomb": 5000}
+SOUND_PRICES = {"fart": 1200, "fart1": 1800, "fart2": 2600}
 FREE = {"size:small", "sound:fart"}
 CODE_REDEEM_COST = 1000
 ADMIN_WALLET_AMOUNT = 999999999
@@ -83,10 +81,10 @@ ADMIN_CODE_HASH = "395fcfb4f94a19b6242902470f4c80cca48eed86fdd65e60c2325339066a9
 
 # sha256 of the code (upper-cased, no spaces) -> what it unlocks.
 CODES = {
-    "9a9ecd556d5eb0f4b3402d2e81ae6f7913f4d5f0eb07fc411a4d85483cce133f": ["size:medium", "sound:splat"],   # PIGEON-PLUS
-    "6bde136c8ac436b7ba67415a436d3a7000a62ebdb4b95c10ffa1a4c26aaf4007": ["sound:squelch", "sound:boing"], # SQUELCH-ME
-    "025a44c68d135721dbd332b1e0406091ab36ca3388dc21c340f666786953abe1": ["size:large"],                   # BIG-ONE
-    "74413f038c81ed7c50b744a156200abeb6e9307e1edd2591be14d1d7bd8ed29b": ["size:mega", "sound:bomb"],      # BOMBS-AWAY
+    "9a9ecd556d5eb0f4b3402d2e81ae6f7913f4d5f0eb07fc411a4d85483cce133f": ["size:medium", "sound:fart1"], # PIGEON-PLUS
+    "6bde136c8ac436b7ba67415a436d3a7000a62ebdb4b95c10ffa1a4c26aaf4007": ["sound:fart2"],                # SQUELCH-ME
+    "025a44c68d135721dbd332b1e0406091ab36ca3388dc21c340f666786953abe1": ["size:large"],                # BIG-ONE
+    "74413f038c81ed7c50b744a156200abeb6e9307e1edd2591be14d1d7bd8ed29b": ["size:mega", "sound:fart2"],  # BOMBS-AWAY
 }
 
 SHOUTS = ["EW!", "MY HAT!", "WHY ME?!", "NOOOO!", "GROSS!", "AGAIN?!", "#$%@!", "MY SUIT!", "SERIOUSLY?!"]
@@ -112,7 +110,7 @@ def code_hash(raw):
 def load_save():
     """Load player progress and recover safely from damaged/old save files."""
     defaults = {
-        "unlocked": [], "size": "small", "sound": "poop",
+        "unlocked": [], "size": "small", "sound": "fart",
         "poop_mode": "single", "poop_modes": ["single"],
         "respect": 0, "respect_plus": 0, "best": 0,
         "admin_unlimited": False,
@@ -135,10 +133,6 @@ def load_save():
     if not isinstance(unlocked, (list, tuple, set)):
         unlocked = []
     unlocked = {item for item in unlocked if isinstance(item, str) and item in valid_unlocks}
-    if data.get("sound") == "plop":
-        data["sound"] = "poop"
-        unlocked.discard("sound:plop")
-        unlocked.add("sound:poop")
     data["unlocked"] = sorted(unlocked | FREE)
 
     size_keys = {item["key"] for item in SIZES}
@@ -147,7 +141,7 @@ def load_save():
     if data.get("size") not in size_keys or "size:" + str(data.get("size")) not in data["unlocked"]:
         data["size"] = "small"
     if data.get("sound") not in sound_keys or "sound:" + str(data.get("sound")) not in data["unlocked"]:
-        data["sound"] = "poop"
+        data["sound"] = "fart"
     if data.get("poop_mode") not in mode_keys:
         data["poop_mode"] = "single"
     modes = data.get("poop_modes", ["single"])
@@ -171,7 +165,7 @@ def clear_user_data(save, wallet):
     save.update({
         "unlocked": sorted(FREE),
         "size": "small",
-        "sound": "poop",
+        "sound": "fart",
         "poop_mode": "single",
         "poop_modes": ["single"],
         "respect": 0,
@@ -641,7 +635,7 @@ def play(stdscr, save, wallet, audio):
                         vy=max(2.0, vy * 0.65 - burst_i * 0.2),
                         size=size_i,
                     ))
-                audio.play_pack(mode["sound"], size_i)
+                audio.play_pack(save["sound"], size_i)
                 if ammo < ammo_cost:
                     reloading = True
                     cooldown = RELOAD_COOLDOWN
@@ -993,17 +987,13 @@ def market(stdscr, save, wallet, audio):
         cy = h // 2 - 8
         amount = POOP_MODES[amount_i]
         center(stdscr, cy, "MARKET", COL["yellow"] | curses.A_BOLD)
-        center(stdscr, cy + 1, "Wallet: %s   Respect+: %d" %
-               (wallet_display(save, wallet), save["respect_plus"]),
+        center(stdscr, cy + 1, "Wallet: %s" % wallet_display(save, wallet),
                COL["green"] | curses.A_BOLD)
         rows = [
             ("SIZE", SIZES[size_i]["name"], size_i in owned_sizes(save), SIZE_PRICES[SIZES[size_i]["key"]]),
             ("SOUND", SOUNDS[sound_i]["name"], sound_i in owned_sounds(save), SOUND_PRICES[SOUNDS[sound_i]["key"]]),
             ("AMOUNT", amount["name"], amount["key"] in save["poop_modes"], amount["cost"]),
         ]
-        rows.extend([
-            ("RESPECT+", "Premium random", save["respect_plus"] > 0, 1),
-        ])
         for i, (kind, value, owned, price) in enumerate(rows):
             selectable_value = i < 3
             displayed_value = "< %s >" % value if selectable_value else value
@@ -1024,6 +1014,7 @@ def market(stdscr, save, wallet, audio):
                 size_i = (size_i + step) % len(SIZES)
             elif row == 1:
                 sound_i = (sound_i + step) % len(SOUNDS)
+                audio.play(sound_i, size_i)
             elif row == 2:
                 amount_i = (amount_i + step) % len(POOP_MODES)
         elif k in (10, 13, curses.KEY_ENTER, ord(" ")):
@@ -1053,32 +1044,6 @@ def market(stdscr, save, wallet, audio):
                     save["poop_mode"] = selected["key"]
                     write_save(save)
                     audio.play_pack(selected["sound"], size_i)
-            elif row == 3 and save["respect_plus"] > 0:
-                owned_keys = set(save["unlocked"])
-                candidates = [
-                    ("size", item, SIZE_PRICES[item["key"]])
-                    for item in SIZES if "size:" + item["key"] not in owned_keys
-                ] + [
-                    ("sound", item, SOUND_PRICES[item["key"]])
-                    for item in SOUNDS if "sound:" + item["key"] not in owned_keys
-                ] + [
-                    ("amount", item, item["cost"])
-                    for item in POOP_MODES if item["key"] not in save["poop_modes"]
-                ]
-                premium = [candidate for candidate in candidates if candidate[2] > 2000] or candidates
-                if premium:
-                    kind, item, _ = random.choice(premium)
-                    save["respect_plus"] -= 1
-                    if kind == "size":
-                        save["unlocked"].append("size:" + item["key"])
-                        save["size"] = item["key"]
-                    elif kind == "sound":
-                        save["unlocked"].append("sound:" + item["key"])
-                        save["sound"] = item["key"]
-                    else:
-                        save["poop_modes"].append(item["key"])
-                        save["poop_mode"] = item["key"]
-                    write_save(save)
         elif k in (ord("c"), ord("C")):
             enter_code(stdscr, save, wallet)
         elif k in (27, ord("q"), ord("Q")):
