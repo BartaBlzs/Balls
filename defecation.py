@@ -91,6 +91,7 @@ FAMILY_OPTIONS = [
     dict(key="condoms", name="IM-PRESS HERE + CONDOMS", price=FAMILY_PRICE + 5000, birds=2, partner="pink", baby=False),
     dict(key="lesbian", name="LESBIAN", price=15000, birds=2, partner="pink", baby=False, gender="female"),
     dict(key="gay", name="GAY", price=15000, birds=2, partner="white", baby=False, gender="male"),
+    dict(key="divorce", name="DIVORCE", price=0, birds=1, partner=None, baby=False, action="divorce"),
 ]
 FREE = {"size:small", "sound:fart"}
 CODE_REDEEM_COST = 1000
@@ -387,6 +388,8 @@ def family_display_name(option, gender=None):
         return "LESBIAN PARTNERS"
     if key == "gay":
         return "GAY PARTNERS"
+    if key == "divorce":
+        return "DIVORCE (-50% POINTS)"
     return option["name"]
 
 # --------------------------------------------------------------------------- audio
@@ -737,7 +740,11 @@ def play(stdscr, save, wallet, audio):
     game_mode = save.get("game_mode", "timed")
     family_unlocked = save.get("family_unlocked", False)
     family_type = save.get("family_type", "family") if family_unlocked else None
-    family_option = next((item for item in FAMILY_OPTIONS if item["key"] == family_type), None)
+    family_option = next(
+        (item for item in FAMILY_OPTIONS
+         if item["key"] == family_type and not item.get("action")),
+        None,
+    )
     family_bird_count = family_option["birds"] if family_option else 1
     size_i = size_index(save)
     mode = next(m for m in POOP_MODES if m["key"] == save["poop_mode"])
@@ -1401,7 +1408,10 @@ def market(stdscr, save, wallet, audio):
             if kind == "RESPECT+":
                 status = "AVAILABLE" if owned else "NEED RESPECT+"
             elif kind == "FAMILY":
-                status = "EQUIPPED" if owned and family_option["key"] == save["family_type"] else ("OWNED" if owned else "$%d" % price)
+                if family_option.get("action") == "divorce":
+                    status = "ACTION"
+                else:
+                    status = "EQUIPPED" if owned and family_option["key"] == save["family_type"] else ("OWNED" if owned else "$%d" % price)
             elif owned:
                 if kind == "SIZE":
                     equipped = save["size"] == SIZES[size_i]["key"]
@@ -1488,7 +1498,15 @@ def market(stdscr, save, wallet, audio):
             elif row == 5:
                 selected = FAMILY_OPTIONS[family_i]
                 key = selected["key"]
-                if key not in save["family_unlocks"]:
+                if selected.get("action") == "divorce":
+                    if not save.get("family_unlocked"):
+                        market_msg = "NO FAMILY TO DIVORCE"
+                    else:
+                        lost_points = save["best"] // 2
+                        save["best"] -= lost_points
+                        write_save(save)
+                        market_msg = "DIVORCED! -%d POINTS" % lost_points
+                elif key not in save["family_unlocks"]:
                     if can_afford(save, wallet, selected["price"]):
                         spend_wallet(save, wallet, selected["price"])
                         save["family_unlocks"].append(key)
