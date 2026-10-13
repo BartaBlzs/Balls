@@ -117,8 +117,8 @@ TITLE = r"""
 
 PIGEON_R = [["  \\\\  ", "==(o> "], ["  --  ", "==(o> "]]
 PIGEON_L = [["  //  ", " <o)=="], ["  --  ", " <o)=="]]
-PIGEON_BABY_R = [["  . ", "=(o>"]]
-PIGEON_BABY_L = [[" .  ", ">o)="]]
+PIGEON_BABY_R = ["  . ", "=(o>"]
+PIGEON_BABY_L = [" .  ", ">o)="]
 
 # --------------------------------------------------------------------------- save / codes
 
@@ -867,6 +867,8 @@ def play(stdscr, save, wallet, audio):
         difficulty_name = ("EASY", "MEDIUM", "HARDCORE", "U ARE FUCKED")[difficulty_tier]
         if difficulty_tier >= 3 and boss is None and not boss_defeated:
             boss = Boss(w, gl)
+            if family_bird_count > 1:
+                boss.cooldown *= 1.5
             announcement = "BOSS INCOMING: THE MAYOR!"
             announcement_time = 3.0
         if difficulty_tier != last_level:
@@ -957,7 +959,7 @@ def play(stdscr, save, wallet, audio):
                     life=ROCK_LIFE,
                     damage=BOSS_ROCK_DAMAGE,
                 ))
-                boss.cooldown = BOSS_ROCK_COOLDOWN
+                boss.cooldown = BOSS_ROCK_COOLDOWN * (1.5 if family_bird_count > 1 else 1.0)
 
         closest = min(
             (min(abs((p.x + 1.5) - (px + 2.5)),
@@ -1074,7 +1076,10 @@ def play(stdscr, save, wallet, audio):
                 if thrower in people and thrower.dead <= 0 and thrower.stun <= 0:
                     rock_throw_queue.pop(0)
                     rock_salvo_thrower = thrower
-                    rock_salvo_remaining = ROCK_SALVO_SIZES[difficulty_tier]
+                    salvo_size = ROCK_SALVO_SIZES[difficulty_tier]
+                    if family_bird_count > 1:
+                        salvo_size = max(1, int(math.ceil(salvo_size * 0.5)))
+                    rock_salvo_remaining = salvo_size
                     rock_salvo_pending = False
                     next_rock_throw = random.uniform(1.0, 2.0)
         if rock_salvo_thrower is not None and rock_salvo_remaining > 0 and next_rock_throw <= 0:
@@ -1103,13 +1108,14 @@ def play(stdscr, save, wallet, audio):
             rock_rate = 1.0
             rock_rate += difficulty_tier * POST_SCORE_ROCK_RATE_STEP
             throw_min, throw_max = ROCK_THROW_RANGES[difficulty_tier]
-            next_rock_throw = random.uniform(throw_min, throw_max) / (difficulty * rock_rate)
+            family_rock_delay = 1.5 if family_bird_count > 1 else 1.0
+            next_rock_throw = (random.uniform(throw_min, throw_max) * family_rock_delay) / (difficulty * rock_rate)
             if rock_salvo_remaining == 0:
                 rock_salvo_thrower = None
                 rock_salvo_pending = bool(rock_throw_queue)
                 rock_salvo_cooldown = random.uniform(
                     ROCK_SALVO_COOLDOWN_MIN, ROCK_SALVO_COOLDOWN_MAX
-                ) / rock_rate
+                ) * family_rock_delay / rock_rate
 
         for pt in particles[:]:
             pt[2] *= 0.98
@@ -1143,14 +1149,25 @@ def play(stdscr, save, wallet, audio):
                     rock["y"] < 0 or rock["y"] > gl):
                 rocks.remove(rock)
                 continue
-            # Flying low makes the pigeon easier to hit.
-            low_altitude = max(0.0, min(1.0, (py - (gl - 8 - LOW_ALTITUDE_BAND)) / LOW_ALTITUDE_BAND))
-            hitbox_x = LOW_ALTITUDE_HITBOX_X * low_altitude
-            hitbox_y = LOW_ALTITUDE_HITBOX_Y * low_altitude
-            rock_hits_player = segment_hits_rect(
-                previous_x, previous_y, rock["x"], rock["y"],
-                px - 0.5 - hitbox_x, py - 0.5 - hitbox_y,
-                px + 5.5 + hitbox_x, py + 2.5 + hitbox_y)
+            # A rock can hit any active family bird. One shared flock HP bar
+            # keeps the result fair while still making companions vulnerable.
+            bird_targets = [(px, py)]
+            if family_option:
+                x_limit = max(1, w - 6)
+                bird_targets.append(((px - face * 7) % x_limit, py + 1.0))
+                if family_option["birds"] == 3:
+                    bird_targets.append(((px - face * 4) % x_limit, py + 3.0))
+            rock_hits_player = False
+            for bird_x, bird_y in bird_targets:
+                low_altitude = max(0.0, min(1.0, (bird_y - (gl - 8 - LOW_ALTITUDE_BAND)) / LOW_ALTITUDE_BAND))
+                hitbox_x = LOW_ALTITUDE_HITBOX_X * low_altitude
+                hitbox_y = LOW_ALTITUDE_HITBOX_Y * low_altitude
+                if segment_hits_rect(
+                        previous_x, previous_y, rock["x"], rock["y"],
+                        bird_x - 0.5 - hitbox_x, bird_y - 0.5 - hitbox_y,
+                        bird_x + 5.5 + hitbox_x, bird_y + 2.5 + hitbox_y):
+                    rock_hits_player = True
+                    break
             if rock_hits_player and shield_charges > 0:
                 rocks.remove(rock)
                 shield_charges -= 1
