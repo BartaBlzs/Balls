@@ -300,6 +300,9 @@ class Audio:
                 raise RuntimeError("Could not load audio file %s: %s" % (path, exc)) from exc
 
     def play(self, pack_i, size_i):
+        if not 0 <= pack_i < len(SOUNDS):
+            curses.beep()
+            return
         pack = SOUNDS[pack_i]
         sound = self.sounds.get(pack["key"])
         if sound is None:
@@ -778,7 +781,7 @@ def play(stdscr, save, wallet, audio):
                 vy=dy / flight_time - 0.5 * ROCK_GRAVITY * flight_time + random.uniform(-aim_noise, aim_noise),
                 life=ROCK_LIFE,
             ))
-            audio.play(4, 0)
+            audio.play_pack("fart2", 0)
             rock_salvo_remaining -= 1
             rock_rate = 1.0
             rock_rate += difficulty_tier * POST_SCORE_ROCK_RATE_STEP
