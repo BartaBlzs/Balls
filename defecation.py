@@ -51,6 +51,7 @@ POOP_MAX_SPEED = 42.0
 POOP_AIR_DRAG = 0.08
 PERSON_DEATH_TIME = 0.85
 PERSON_HIT_VERTICAL_MARGIN = 0.5
+PERSON_HIT_POINTS = 10
 BOSS_HP = 12
 BOSS_SPEED = 5.0
 BOSS_ROCK_COOLDOWN = 1.8
@@ -794,8 +795,9 @@ def play(stdscr, save, wallet, audio):
     reward_flash = 0.0
     announcement = ""
     announcement_time = 0.0
-    # Every run starts at EASY; difficulty rises only with the player's score.
-    last_level = score_difficulty(score)[1]
+    # Multi-poop modes start at MEDIUM; score still controls later escalation.
+    mode_hardness = min(2, mode["count"])
+    last_level = min(3, score_difficulty(score)[1] + mode_hardness - 1)
     near_people = False
     reward_tier = 0
     rock_salvo_remaining = 0
@@ -1039,7 +1041,7 @@ def play(stdscr, save, wallet, audio):
                         distance = min(abs((victim.x + 1.5) - (px + 2.5)),
                                        w - abs((victim.x + 1.5) - (px + 2.5)))
                         proximity_mult = 2 if distance <= NEAR_PERSON_DISTANCE else 1
-                        gained = s["pts"] * Person.KINDS[victim.kind]["mult"] * proximity_mult
+                        gained = PERSON_HIT_POINTS * Person.KINDS[victim.kind]["mult"] * proximity_mult
                         score += gained
                         new_tier = score // 30
                         if new_tier > reward_tier:
