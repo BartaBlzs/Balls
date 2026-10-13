@@ -114,7 +114,7 @@ def load_save():
     defaults = {
         "unlocked": [], "size": "small", "sound": "poop",
         "poop_mode": "single", "poop_modes": ["single"],
-        "respect": 0, "respect_plus": 0, "best": 0,
+        "respect_plus": 0, "best": 0,
         "admin_unlimited": False,
     }
     data = defaults.copy()
@@ -157,12 +157,13 @@ def load_save():
     if data["poop_mode"] not in data["poop_modes"]:
         data["poop_mode"] = "single"
 
-    for key in ("respect", "respect_plus", "best"):
+    for key in ("respect_plus", "best"):
         try:
             data[key] = max(0, int(data.get(key, 0)))
         except (ValueError, TypeError, OverflowError):
             data[key] = 0
     data["admin_unlimited"] = bool(data.get("admin_unlimited", False))
+    data.pop("respect", None)
     return data
 
 
@@ -174,7 +175,6 @@ def clear_user_data(save, wallet):
         "sound": "poop",
         "poop_mode": "single",
         "poop_modes": ["single"],
-        "respect": 0,
         "respect_plus": 0,
         "best": 0,
         "admin_unlimited": False,
@@ -748,9 +748,9 @@ def play(stdscr, save, wallet, audio):
             announcement = "AMAZING! FIVE HIT! RESPECT+ +1"
             announcement_time = 2.5
         elif direct_hits_this_moment >= 3:
-            save["respect"] += 1
+            save["respect_plus"] += 1
             write_save(save)
-            announcement = "GOOD JOB! TRIPLE HIT! RESPECT +1"
+            announcement = "GOOD JOB! TRIPLE HIT! RESPECT+ +1"
             announcement_time = 2.5
 
         if rock_salvo_pending and rock_salvo_remaining == 0 and rock_salvo_cooldown <= 0:
@@ -922,8 +922,7 @@ def play(stdscr, save, wallet, audio):
             cd_attr = (COL["red"] | curses.A_BOLD) if reloading else ((COL["yellow"] | curses.A_BOLD) if cooldown > 0 else (COL["green"] | curses.A_BOLD))
             cd_text = "RELOAD %.1fs" % cooldown if reloading else ("CD %.1fs" % cooldown if cooldown > 0 else "CD READY")
         put(stdscr, 1, 18, cd_text, cd_attr)
-        put(stdscr, 1, 34, "RESPECT %d  RESPECT+ %d" %
-            (save["respect"], save["respect_plus"]), COL["red"] | curses.A_BOLD)
+        put(stdscr, 1, 34, "RESPECT+ %d" % save["respect_plus"], COL["red"] | curses.A_BOLD)
         put(stdscr, h - 1, 1, "arrows/WASD fly   SPACE poop   Q menu", curses.A_DIM)
         stdscr.refresh()
 
