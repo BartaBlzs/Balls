@@ -792,6 +792,9 @@ def play(stdscr, save, wallet, audio):
     retaliation_banner = 0.0
     hurt_iframes = 0.0
     hit_notice = 0.0
+    respect_combo_hits = 0
+    respect_combo_people = set()
+    respect_combo_timer = 0.0
     reward_flash = 0.0
     announcement = ""
     announcement_time = 0.0
@@ -860,6 +863,10 @@ def play(stdscr, save, wallet, audio):
         retaliation_banner = max(0.0, retaliation_banner - dt)
         hurt_iframes = max(0.0, hurt_iframes - dt)
         hit_notice = max(0.0, hit_notice - dt)
+        respect_combo_timer = max(0.0, respect_combo_timer - dt)
+        if respect_combo_timer <= 0:
+            respect_combo_hits = 0
+            respect_combo_people.clear()
         reward_flash = max(0.0, reward_flash - dt)
         announcement_time = max(0.0, announcement_time - dt)
         rock_salvo_cooldown = max(0.0, rock_salvo_cooldown - dt)
@@ -1035,6 +1042,10 @@ def play(stdscr, save, wallet, audio):
                     if id(hit) not in direct_hit_people:
                         direct_hit_people.add(id(hit))
                         direct_hits_this_moment += 1
+                    if id(hit) not in respect_combo_people:
+                        respect_combo_people.add(id(hit))
+                        respect_combo_hits += 1
+                        respect_combo_timer = 0.45
                     # Group membership does not turn a miss into a hit.
                     victims = (hit,)
                     for victim in victims:
@@ -1061,16 +1072,22 @@ def play(stdscr, save, wallet, audio):
                 else:
                     splats.append([poop["x"], s["splat"], 4.0])
 
-        if direct_hits_this_moment >= 5:
+        if respect_combo_hits >= 5:
             save["respect_plus"] += 1
             write_save(save)
             announcement = "AMAZING! FIVE HIT! RESPECT+ +1"
             announcement_time = 2.5
-        elif direct_hits_this_moment >= 3:
+            respect_combo_hits = 0
+            respect_combo_people.clear()
+            respect_combo_timer = 0.0
+        elif respect_combo_hits >= 3:
             save["respect_plus"] += 1
             write_save(save)
             announcement = "GOOD JOB! TRIPLE HIT! RESPECT+ +1"
             announcement_time = 2.5
+            respect_combo_hits = 0
+            respect_combo_people.clear()
+            respect_combo_timer = 0.0
 
         if rock_salvo_pending and rock_salvo_remaining == 0 and rock_salvo_cooldown <= 0:
             if rock_throw_queue:
