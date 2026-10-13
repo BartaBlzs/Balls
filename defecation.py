@@ -278,6 +278,10 @@ def sound_index(save):
 # --------------------------------------------------------------------------- audio
 
 VOLUME = 0.1
+MENU_MUSIC_VOLUME = 0.1
+BACKGROUND_MUSIC_VOLUME = 0.1
+MENU_MUSIC_FILE = "Star Wars Main Theme Cover (Handfarts).mp3"
+BACKGROUND_MUSIC_FILE = "🌿 Nature Soundscape Relaxing Bird Songs for Study & Meditation 10 Min Mix 🎶.mp3"
 MAX_SIMULTANEOUS_SOUNDS = 16
 
 class Audio:
@@ -299,6 +303,44 @@ class Audio:
             except pygame.error as exc:
                 raise RuntimeError("Could not load audio file %s: %s" % (path, exc)) from exc
 
+        self.menu_music_path = os.path.join(self.dir, MENU_MUSIC_FILE)
+        self.background_music_path = os.path.join(self.dir, BACKGROUND_MUSIC_FILE)
+        self.menu_volume = MENU_MUSIC_VOLUME
+        self.menu_muted = False
+        for path in (self.menu_music_path, self.background_music_path):
+            if not os.path.isfile(path):
+                raise RuntimeError("Could not find music file: %s" % path)
+
+    def start_menu_music(self):
+        try:
+            pygame.mixer.music.load(self.menu_music_path)
+        except pygame.error as exc:
+            raise RuntimeError("Could not load menu music file %s: %s" % (self.menu_music_path, exc)) from exc
+        self._apply_menu_volume()
+        pygame.mixer.music.play(-1)
+
+    def _apply_menu_volume(self):
+        pygame.mixer.music.set_volume(0.0 if self.menu_muted else self.menu_volume)
+
+    def adjust_menu_volume(self, delta):
+        self.menu_volume = max(0.0, min(1.0, self.menu_volume + delta))
+        self._apply_menu_volume()
+
+    def toggle_menu_mute(self):
+        self.menu_muted = not self.menu_muted
+        self._apply_menu_volume()
+
+    def start_background_music(self):
+        try:
+            pygame.mixer.music.load(self.background_music_path)
+        except pygame.error as exc:
+            raise RuntimeError("Could not load background music file %s: %s" % (self.background_music_path, exc)) from exc
+        pygame.mixer.music.set_volume(BACKGROUND_MUSIC_VOLUME)
+        pygame.mixer.music.play(-1)
+
+    def stop_background_music(self):
+        pygame.mixer.music.stop()
+
     def play(self, pack_i, size_i):
         if not 0 <= pack_i < len(SOUNDS):
             curses.beep()
@@ -316,6 +358,7 @@ class Audio:
         self.play(pack_i, size_i)
 
     def cleanup(self):
+        self.stop_background_music()
         pygame.mixer.quit()
 
 # --------------------------------------------------------------------------- drawing helpers
@@ -492,6 +535,7 @@ def play(stdscr, save, wallet, audio):
     h, w = stdscr.getmaxyx()
     if w < MIN_W or h < MIN_H:
         return None
+    audio.start_background_music()
     size_i = size_index(save)
     mode = next(m for m in POOP_MODES if m["key"] == save["poop_mode"])
     POOP_COOLDOWN, RELOAD_COOLDOWN = 0.28, 2.0
@@ -585,6 +629,8 @@ def play(stdscr, save, wallet, audio):
                 if score > save["best"]:
                     save["best"] = score
                     write_save(save)
+                audio.stop_background_music()
+                audio.start_menu_music()
                 return score
 
         # ---- pigeon
@@ -781,7 +827,6 @@ def play(stdscr, save, wallet, audio):
                 vy=dy / flight_time - 0.5 * ROCK_GRAVITY * flight_time + random.uniform(-aim_noise, aim_noise),
                 life=ROCK_LIFE,
             ))
-            audio.play_pack("fart2", 0)
             rock_salvo_remaining -= 1
             rock_rate = 1.0
             rock_rate += difficulty_tier * POST_SCORE_ROCK_RATE_STEP
@@ -925,6 +970,8 @@ def play(stdscr, save, wallet, audio):
 
         time.sleep(max(0.0, 1 / 30 - (time.perf_counter() - now)))
 
+    audio.stop_background_music()
+
     # ---- results
     new_best = score > save["best"]
     if new_best:
@@ -945,6 +992,7 @@ def play(stdscr, save, wallet, audio):
     time.sleep(0.6)
     curses.flushinp()
     stdscr.getch()
+    audio.start_menu_music()
     return score
 
 # --------------------------------------------------------------------------- menus
@@ -1073,24 +1121,30 @@ def confirm_clear_user_data(stdscr, save, wallet):
 
 
 def menu(stdscr, save, wallet, audio):
-    items = ["PLAY", "MARKET", "CLEAR USER DATA", "QUIT"]
+    items = ["PLAY", "MARKET", "AUDIO", "CLEAR USER DATA", "QUIT"]
     sel, msg = 0, ""
+    audio.start_menu_music()
     while True:
         stdscr.nodelay(False)
         stdscr.timeout(-1)
         cursor(0)
         stdscr.erase()
         h, _ = stdscr.getmaxyx()
-        top = max(1, h // 2 - 8)
+        top = max(0, h // 2 - 10)
         for i, line in enumerate(TITLE):
             center(stdscr, top + i, line, COL["white"] | curses.A_BOLD)
         center(stdscr, top + len(TITLE) + 1, "shit on people.", curses.A_DIM)
         for i, it in enumerate(items):
+            if i == 2:
+                it = "AUDIO: MUTED" if audio.menu_muted else "AUDIO: %d%%" % round(audio.menu_volume * 100)
             text = ("> %s <" % it) if i == sel else it
             center(stdscr, top + 8 + i * 2, text, (COL["yellow"] | curses.A_BOLD) if i == sel else 0)
         if msg:
-            center(stdscr, top + 17, msg, COL["red"] | curses.A_BOLD)
-        center(stdscr, top + 19, "Best: %d   Wallet: %s" % (save["best"], wallet_display(save, wallet)), COL["magenta"])
+            center(stdscr, top + 18, msg, COL["red"] | curses.A_BOLD)
+        elif sel == 2:
+            center(stdscr, top + 18, "Left/Right: volume   Enter: mute/unmute", curses.A_DIM)
+        else:
+            center(stdscr, top + 18, "Best: %d   Wallet: %s" % (save["best"], wallet_display(save, wallet)), COL["magenta"])
         stdscr.refresh()
 
         k = stdscr.getch()
@@ -1099,9 +1153,13 @@ def menu(stdscr, save, wallet, audio):
             sel = (sel - 1) % len(items)
         elif k in (curses.KEY_DOWN, ord("j")):
             sel = (sel + 1) % len(items)
+        elif sel == 2 and k in (curses.KEY_LEFT, ord("-")):
+            audio.adjust_menu_volume(-0.05)
+        elif sel == 2 and k in (curses.KEY_RIGHT, ord("+"), ord("=")):
+            audio.adjust_menu_volume(0.05)
         elif k in (10, 13, curses.KEY_ENTER):
             act = sel
-        elif ord("1") <= k <= ord("4"):
+        elif ord("1") <= k <= ord("5"):
             act = k - ord("1")
         elif k in (ord("q"), ord("Q"), 27):
             return
@@ -1112,8 +1170,10 @@ def menu(stdscr, save, wallet, audio):
         elif act == 1:
             market(stdscr, save, wallet, audio)
         elif act == 2:
-            msg = confirm_clear_user_data(stdscr, save, wallet)
+            audio.toggle_menu_mute()
         elif act == 3:
+            msg = confirm_clear_user_data(stdscr, save, wallet)
+        elif act == 4:
             return
 
 
