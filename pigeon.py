@@ -364,12 +364,9 @@ def init_colors():
         bg = -1
     except curses.error:
         bg = curses.COLOR_BLACK
-    try:
-        curses.init_color(8, 478, 349, 4)
-        yellow = 8
-    except curses.error:
-        yellow = curses.COLOR_YELLOW
-    cols = [curses.COLOR_WHITE, yellow, curses.COLOR_GREEN, curses.COLOR_CYAN,
+    # Use the terminal's standard palette.  Redefining yellow with RGB values
+    # produces different results across ncurses, PDCurses, and themed shells.
+    cols = [curses.COLOR_WHITE, curses.COLOR_YELLOW, curses.COLOR_GREEN, curses.COLOR_CYAN,
             curses.COLOR_MAGENTA, curses.COLOR_RED, curses.COLOR_BLUE]
     for i, (n, c) in enumerate(zip(names, cols), 1):
         curses.init_pair(i, c, bg)
@@ -576,13 +573,14 @@ def play(stdscr, save, wallet, audio):
     rock_salvo_pending = False
     next_rock_throw = 0.0
     died = False
-    start = last = time.perf_counter()
+    start = None
+    last = time.perf_counter()
 
     while True:
         now = time.perf_counter()
-        dt = min(0.1, now - last)
+        dt = 0.0 if start is None else min(0.1, now - last)
         last = now
-        left = ROUND_SECS - (now - start)
+        left = ROUND_SECS if start is None else ROUND_SECS - (now - start)
         if left <= 0:
             break
 
@@ -649,6 +647,8 @@ def play(stdscr, save, wallet, audio):
             mode = next(m for m in POOP_MODES if m["key"] == save["poop_mode"])
             ammo_cost = s["cost"] * mode["count"]
             if ammo >= ammo_cost:
+                if start is None:
+                    start = now
                 ammo -= ammo_cost
                 cooldown = POOP_COOLDOWN
                 for burst_i in range(mode["count"]):
@@ -928,6 +928,8 @@ def play(stdscr, save, wallet, audio):
             center(stdscr, 3, announcement, COL["yellow"] | curses.A_BOLD)
         if reward_flash > 0:
             center(stdscr, 4, "+$5 every 30 score!", COL["green"] | curses.A_BOLD)
+        if start is None:
+            center(stdscr, h // 2, "PRESS SPACE TO START", COL["yellow"] | curses.A_BOLD)
         bar = int(ammo / MAX_AMMO * 12)
         ammo_attr = COL["red"] | curses.A_BOLD if no_ammo_flash > 0 else COL["cyan"]
         put(stdscr, 1, 1, "AMMO [%s%s]" % ("#" * bar, "-" * (12 - bar)), ammo_attr)
