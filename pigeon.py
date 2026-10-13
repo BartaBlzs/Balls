@@ -3,8 +3,6 @@ import json
 import math
 import os
 import random
-import shutil
-import subprocess
 import sys
 import time
 
@@ -12,6 +10,11 @@ try:
     import curses
 except ImportError:
     sys.exit("curses not found. On Windows run: pip install windows-curses")
+
+try:
+    import pygame
+except ImportError:
+    sys.exit("pygame not found. Install it with: pip install pygame")
 
 SAVE_PATH = os.path.join(os.path.expanduser("~"), ".pigeon_save.json")
 WALLET_PATH = os.path.join(os.path.expanduser("~"), ".pigeon_wallet.json")
@@ -59,21 +62,21 @@ SIZES = [
     dict(key="mega",   name="MEGA",   glyph="(@@@)",  splat="~~(@@@)~~",  cost=8, pts=150, hw=3),
 ]
 SOUNDS = [
-    dict(key="poop",    name="Poop"),
-    dict(key="splat",   name="Splat"),
-    dict(key="squelch", name="Squelch"),
-    dict(key="boing",   name="Boing"),
-    dict(key="bomb",    name="Bomb"),
+    dict(key="fart",    name="Poop",    file="fart.mp3"),
+    dict(key="splat",   name="Splat",   file="splat.mp3"),
+    dict(key="squelch", name="Squelch", file="squelch.mp3"),
+    dict(key="boing",   name="Boing",   file="boing.mp3"),
+    dict(key="bomb",    name="Bomb",    file="bomb.mp3"),
 ]
 POOP_MODES = [
-    dict(key="single", name="Single", count=1, cost=0, sound="poop"),
+    dict(key="single", name="Single", count=1, cost=0, sound="fart"),
     dict(key="double", name="Double", count=2, cost=1500, sound="splat"),
     dict(key="triple", name="Triple", count=3, cost=2500, sound="squelch"),
     dict(key="shower", name="Shower", count=5, cost=5000, sound="bomb"),
 ]
 SIZE_PRICES = {"small": 1200, "medium": 2200, "large": 3500, "mega": 6000}
-SOUND_PRICES = {"poop": 1200, "splat": 1800, "squelch": 2600, "boing": 3400, "bomb": 5000}
-FREE = {"size:small", "sound:poop"}
+SOUND_PRICES = {"fart": 1200, "splat": 1800, "squelch": 2600, "boing": 3400, "bomb": 5000}
+FREE = {"size:small", "sound:fart"}
 CODE_REDEEM_COST = 1000
 
 # sha256 of the code (upper-cased, no spaces) -> what it unlocks.
@@ -259,87 +262,37 @@ MAX_SIMULTANEOUS_SOUNDS = 16
 class Audio:
     def __init__(self):
         self.dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "audio")
-        self.procs = []
-        self.cmd = self._find_player()
+        try:
+            pygame.mixer.init()
+            pygame.mixer.set_num_channels(MAX_SIMULTANEOUS_SOUNDS)
+        except pygame.error as exc:
+            raise RuntimeError("Could not initialize audio: %s" % exc) from exc
 
-    @staticmethod
-    def _find_player():
-        players = [["ffplay", "-nodisp", "-autoexit", "-loglevel", "quiet"],
-                   ["afplay"], ["paplay"], ["pw-play"], ["aplay", "-q"],
-                   ["play", "-q"]]
-        if sys.platform.startswith("win"):
-            players.append([
-                "powershell.exe", "-NoProfile", "-STA", "-WindowStyle", "Hidden", "-Command",
-                ""
-            ])
-        for cmd in players:
-            if shutil.which(cmd[0]):
-                return cmd
-        return None
+        self.sounds = {}
+        for sound in SOUNDS:
+            path = os.path.join(self.dir, sound["file"])
+            if not os.path.isfile(path):
+                continue
+            try:
+                self.sounds[sound["key"]] = pygame.mixer.Sound(path)
+            except pygame.error as exc:
+                raise RuntimeError("Could not load audio file %s: %s" % (path, exc)) from exc
 
     def play(self, pack_i, size_i):
-        pack = SOUNDS[pack_i]["key"]
-        if self.cmd is None:
+        pack = SOUNDS[pack_i]
+        sound = self.sounds.get(pack["key"])
+        if sound is None:
             curses.beep()
             return
-        path = os.path.join(self.dir, pack + ".mp3")
-        if not os.path.isfile(path):
-            curses.beep()
-            return
-        self.procs = [p for p in self.procs if p.poll() is None]   # reap finished players
-        if len(self.procs) >= MAX_SIMULTANEOUS_SOUNDS:
-            return
-        try:
-            self.procs.append(subprocess.Popen(self._play_command(path), stdout=subprocess.DEVNULL,
-                                               stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL))
-        except OSError:
-            self.cmd = None
+        sound.set_volume(max(0.0, min(1.0, VOLUME)))
+        sound.play()
 
     def play_pack(self, pack, size_i):
         pack_i = next(i for i, sound in enumerate(SOUNDS) if sound["key"] == pack)
         self.play(pack_i, size_i)
 
-    def _play_command(self, path):
-        player = os.path.basename(self.cmd[0]).lower()
-        volume = max(0.0, min(1.0, VOLUME))
-        if player == "ffplay":
-            return self.cmd + ["-volume", str(int(volume * 100)), path]
-        if player == "afplay":
-            return self.cmd + ["-v", str(volume), path]
-        if player == "paplay":
-            return self.cmd + ["--volume", str(int(volume * 65536)), path]
-        if player == "pw-play":
-            return self.cmd + ["--volume", str(volume), path]
-        if player == "aplay":
-            return self.cmd + [path]
-        if player == "play":
-            return self.cmd + ["-v", str(volume), path]
-        if player == "powershell.exe":
-            safe_path = path.replace("'", "''")
-            script = (
-                "$done = New-Object Threading.ManualResetEvent($false); "
-                "Add-Type -AssemblyName PresentationCore; "
-                "$player = New-Object System.Windows.Media.MediaPlayer; "
-                "$player.Volume = " + str(volume) + "; "
-                "$dispatcher = [System.Windows.Threading.Dispatcher]::CurrentDispatcher; "
-                "$timer = New-Object System.Windows.Threading.DispatcherTimer; "
-                "$timer.Interval = [TimeSpan]::FromSeconds(10); "
-                "$timer.Add_Tick({ $player.Close(); $dispatcher.InvokeShutdown() }); "
-                "$player.add_MediaOpened({ $player.Play(); $timer.Start() }); "
-                "$player.add_MediaEnded({ $player.Close(); $dispatcher.InvokeShutdown() }); "
-                "$player.add_MediaFailed({ $dispatcher.InvokeShutdown() }); "
-                "$player.Open([Uri]'" + safe_path + "'); "
-                "[System.Windows.Threading.Dispatcher]::Run()"
-            )
-            return self.cmd[:-1] + [script]
-        return self.cmd + [path, str(volume)]
-
     def cleanup(self):
-        for p in self.procs:
-            try:
-                p.terminate()
-            except OSError:
-                pass
+        pygame.mixer.quit()
 
 # --------------------------------------------------------------------------- drawing helpers
 
