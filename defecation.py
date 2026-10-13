@@ -93,10 +93,11 @@ SHOUTS = ["EW!", "MY HAT!", "WHY ME?!", "NOOOO!", "GROSS!", "AGAIN?!", "#$%@!", 
 VIP_SHOUTS = ["MY $500 JACKET!", "DO YOU KNOW WHO I AM?!", "MY LAWYER WILL HEAR OF THIS!"]
 
 TITLE = r"""
- ___ ___ ___ ___ ___  _  _
-| _ \_ _/ __| __/ _ \| \| |
-|  _/| | (_ | _| (_) | .` |
-|_| |___\___|___\___/|_|\_|
+ ____        __                _   _             
+|  _ \  ___ / _| ___  ___ __ _| |_(_) ___  _ __  
+| | | |/ _ \ |_ / _ \/ __/ _` | __| |/ _ \| '_ \ 
+| |_| |  __/  _|  __/ (_| (_| | |_| | (_) | | | |
+|____/ \___|_|  \___|\___\__,_|\__|_|\___/|_| |_|
 """.strip("\n").splitlines()
 
 PIGEON_R = [["  \\\\  ", "==(o> "], ["  --  ", "==(o> "]]
@@ -982,32 +983,35 @@ def enter_code(stdscr, save, wallet):
 def market(stdscr, save, wallet, audio):
     row = 0
     size_i, sound_i = size_index(save), sound_index(save)
+    amount_i = next(
+        (i for i, mode in enumerate(POOP_MODES) if mode["key"] == save["poop_mode"]),
+        0,
+    )
     while True:
         stdscr.erase()
         h, _ = stdscr.getmaxyx()
         cy = h // 2 - 8
-        current = next(m for m in POOP_MODES if m["key"] == save["poop_mode"])
+        amount = POOP_MODES[amount_i]
         center(stdscr, cy, "MARKET", COL["yellow"] | curses.A_BOLD)
-        center(stdscr, cy + 1, "Wallet: %s   Respect: %d   Respect+: %d" %
-               (wallet_display(save, wallet), save["respect"], save["respect_plus"]),
+        center(stdscr, cy + 1, "Wallet: %s   Respect+: %d" %
+               (wallet_display(save, wallet), save["respect_plus"]),
                COL["green"] | curses.A_BOLD)
         rows = [
             ("SIZE", SIZES[size_i]["name"], size_i in owned_sizes(save), SIZE_PRICES[SIZES[size_i]["key"]]),
             ("SOUND", SOUNDS[sound_i]["name"], sound_i in owned_sounds(save), SOUND_PRICES[SOUNDS[sound_i]["key"]]),
-        ] + [
-            ("AMOUNT", mode["name"], mode["key"] in save["poop_modes"], mode["cost"])
-            for mode in POOP_MODES
+            ("AMOUNT", amount["name"], amount["key"] in save["poop_modes"], amount["cost"]),
         ]
         rows.extend([
-            ("RESPECT", "Cheapest random", save["respect"] > 0, 1),
             ("RESPECT+", "Premium random", save["respect_plus"] > 0, 1),
         ])
         for i, (kind, value, owned, price) in enumerate(rows):
+            selectable_value = i < 3
+            displayed_value = "< %s >" % value if selectable_value else value
             label_text = "%s %s: %s - %s" % (
-                ">" if i == row else " ", kind, value, "OWNED" if owned else "$%d" % price)
+                ">" if i == row else " ", kind, displayed_value, "OWNED" if owned else "$%d" % price)
             center(stdscr, cy + 3 + i, label_text, curses.A_BOLD if i == row else 0)
         center(stdscr, cy + 10, "Left/right select   Enter buy/use   C redeem   Esc back", curses.A_DIM)
-        center(stdscr, cy + 11, "Current: %s (%d at a time)" % (current["name"], current["count"]), COL["cyan"])
+        center(stdscr, cy + 11, "Current: %s (%d at a time)" % (amount["name"], amount["count"]), COL["cyan"])
         stdscr.refresh()
         k = stdscr.getch()
         if k in (curses.KEY_UP, ord("k")):
@@ -1020,9 +1024,8 @@ def market(stdscr, save, wallet, audio):
                 size_i = (size_i + step) % len(SIZES)
             elif row == 1:
                 sound_i = (sound_i + step) % len(SOUNDS)
-            elif row < 2 + len(POOP_MODES):
-                amount_row = row - 2
-                row = 2 + (amount_row + step) % len(POOP_MODES)
+            elif row == 2:
+                amount_i = (amount_i + step) % len(POOP_MODES)
         elif k in (10, 13, curses.KEY_ENTER, ord(" ")):
             if row == 0:
                 item, owned, price = SIZES[size_i], size_i in owned_sizes(save), SIZE_PRICES[SIZES[size_i]["key"]]
@@ -1041,8 +1044,8 @@ def market(stdscr, save, wallet, audio):
                     save["sound"] = item["key"]
                     write_save(save)
                     audio.play(sound_i, size_i)
-            elif row < 2 + len(POOP_MODES):
-                selected = POOP_MODES[row - 2]
+            elif row == 2:
+                selected = POOP_MODES[amount_i]
                 if selected["key"] in save["poop_modes"] or can_afford(save, wallet, selected["cost"]):
                     if selected["key"] not in save["poop_modes"]:
                         spend_wallet(save, wallet, selected["cost"])
@@ -1050,34 +1053,7 @@ def market(stdscr, save, wallet, audio):
                     save["poop_mode"] = selected["key"]
                     write_save(save)
                     audio.play_pack(selected["sound"], size_i)
-            elif row < 2 + len(POOP_MODES) + 1 and save["respect"] > 0:
-                owned_size_keys = set(save["unlocked"])
-                candidates = [
-                    ("size", item, SIZE_PRICES[item["key"]])
-                    for item in SIZES if "size:" + item["key"] not in owned_size_keys
-                ] + [
-                    ("sound", item, SOUND_PRICES[item["key"]])
-                    for item in SOUNDS if "sound:" + item["key"] not in owned_size_keys
-                ] + [
-                    ("amount", item, item["cost"])
-                    for item in POOP_MODES if item["key"] not in save["poop_modes"]
-                ]
-                if candidates:
-                    cheapest = min(candidate[2] for candidate in candidates)
-                    kind, item, _ = random.choice(
-                        [candidate for candidate in candidates if candidate[2] == cheapest])
-                    save["respect"] -= 1
-                    if kind == "size":
-                        save["unlocked"].append("size:" + item["key"])
-                        save["size"] = item["key"]
-                    elif kind == "sound":
-                        save["unlocked"].append("sound:" + item["key"])
-                        save["sound"] = item["key"]
-                    else:
-                        save["poop_modes"].append(item["key"])
-                        save["poop_mode"] = item["key"]
-                    write_save(save)
-            elif save["respect_plus"] > 0:
+            elif row == 3 and save["respect_plus"] > 0:
                 owned_keys = set(save["unlocked"])
                 candidates = [
                     ("size", item, SIZE_PRICES[item["key"]])
