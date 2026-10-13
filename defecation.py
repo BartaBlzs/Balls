@@ -3,6 +3,7 @@ import json
 import math
 import os
 import random
+import secrets
 import sys
 import time
 
@@ -18,6 +19,7 @@ except ImportError:
 
 SAVE_PATH = os.path.join(os.path.expanduser("~"), ".pigeon_save.json")
 WALLET_PATH = os.path.join(os.path.expanduser("~"), ".pigeon_wallet.json")
+GENERATED_CODES_PATH = os.path.join(os.path.expanduser("~"), ".pigeon_generated_codes.json")
 WALLET_SALT = "PIGEON_WALLET_V1"
 ROUND_SECS = 120
 MIN_W, MIN_H = 70, 20
@@ -282,6 +284,39 @@ def write_wallet(money):
     return write_json_atomic(WALLET_PATH, payload)
 
 
+def load_generated_codes():
+    try:
+        with open(GENERATED_CODES_PATH, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError, TypeError):
+        return {}
+
+
+def generate_money_code(admin_code, amount):
+    """Create one unique, one-use money code after checking admin access."""
+    if code_hash(admin_code) != ADMIN_CODE_HASH:
+        return False, "Admin code rejected."
+    try:
+        amount = int(amount)
+    except (TypeError, ValueError):
+        return False, "Amount must be a whole number."
+    if amount <= 0 or amount > 1_000_000_000:
+        return False, "Amount must be between $1 and $1,000,000,000."
+
+    generated = load_generated_codes()
+    alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+    while True:
+        code = "".join(secrets.choice(alphabet) for _ in range(12))
+        hashed = code_hash(code)
+        if hashed not in generated and hashed not in CODES:
+            break
+    generated[hashed] = {"amount": amount, "used": False}
+    if not write_json_atomic(GENERATED_CODES_PATH, generated):
+        return False, "Could not save generated code."
+    return True, code
+
+
 def wallet_display(save, wallet):
     return "UNLIMITED" if save.get("admin_unlimited", False) else "$%d" % wallet["money"]
 
@@ -348,6 +383,27 @@ def redeem(save, wallet, raw):
         write_save(save)
         write_wallet(wallet["money"])
         return True, "Admin mode enabled: unlimited money."
+
+    generated = load_generated_codes()
+    generated_entry = generated.get(hashed)
+    if generated_entry is not None:
+        if not isinstance(generated_entry, dict) or generated_entry.get("used"):
+            return False, "This generated code was already used."
+        try:
+            amount = max(0, int(generated_entry["amount"]))
+        except (KeyError, TypeError, ValueError):
+            return False, "This generated code is invalid."
+        wallet["money"] += amount
+        generated_entry["used"] = True
+        if not write_wallet(wallet["money"]):
+            wallet["money"] -= amount
+            return False, "Could not save the money reward."
+        if not write_json_atomic(GENERATED_CODES_PATH, generated):
+            wallet["money"] -= amount
+            write_wallet(wallet["money"])
+            return False, "Could not save the code status."
+        write_save(save)
+        return True, "Generated code redeemed: +$%d" % amount
 
     unlocks = CODES.get(hashed)
     if not unlocks:
@@ -1654,6 +1710,18 @@ def main(stdscr):
 
 
 if __name__ == "__main__":
+    if len(sys.argv) >= 3 and sys.argv[1] == "--generate":
+        generate_args = sys.argv[2:]
+        if len(generate_args) == 1 and "," in generate_args[0]:
+            admin_code, amount = generate_args[0].split(",", 1)
+        elif len(generate_args) == 2:
+            admin_code, amount = generate_args
+        else:
+            print('Usage: python defecation.py --generate "ADMIN-CODE" 5000')
+            sys.exit(2)
+        ok, result = generate_money_code(admin_code.strip(), amount.strip())
+        print(result)
+        sys.exit(0 if ok else 1)
     if len(sys.argv) == 3 and sys.argv[1] == "--hash":
         print(code_hash(sys.argv[2]))
         sys.exit(0)
