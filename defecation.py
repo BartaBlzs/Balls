@@ -52,6 +52,11 @@ POOP_AIR_DRAG = 0.08
 PERSON_DEATH_TIME = 0.85
 PERSON_HIT_VERTICAL_MARGIN = 0.5
 PERSON_HIT_POINTS = 10
+BOSS_HP = 12
+BOSS_SPEED = 5.0
+BOSS_ROCK_COOLDOWN = 1.8
+BOSS_ROCK_DAMAGE = 15
+FAMILY_PRICE = 10000
 
 # --------------------------------------------------------------------------- content
 
@@ -75,6 +80,18 @@ POOP_MODES = [
 ]
 SIZE_PRICES = {"small": 1200, "medium": 2200, "large": 3500, "mega": 6000}
 SOUND_PRICES = {"fart": 1200, "fart1": 1800, "fart2": 2600}
+UPGRADES = [
+    dict(key="shield", name="Shield", price=5000),
+    dict(key="rapid_fire", name="Rapid-fire Laxative", price=6500),
+    dict(key="fast_move", name="Faster Pigeon Movement", price=4500),
+    dict(key="fast_reload", name="Faster Reload", price=4500),
+]
+FAMILY_OPTIONS = [
+    dict(key="family", name="IM-PRESS HERE", price=FAMILY_PRICE, birds=3, partner="pink", baby=True, gender=None),
+    dict(key="condoms", name="IM-PRESS HERE + CONDOMS", price=FAMILY_PRICE + 5000, birds=2, partner="pink", baby=False),
+    dict(key="lesbian", name="LESBIAN", price=15000, birds=2, partner="pink", baby=False, gender="female"),
+    dict(key="gay", name="GAY", price=15000, birds=2, partner="white", baby=False, gender="male"),
+]
 FREE = {"size:small", "sound:fart"}
 CODE_REDEEM_COST = 1000
 ADMIN_WALLET_AMOUNT = 999999999
@@ -101,6 +118,8 @@ TITLE = r"""
 
 PIGEON_R = [["  \\\\  ", "==(o> "], ["  --  ", "==(o> "]]
 PIGEON_L = [["  //  ", " <o)=="], ["  --  ", " <o)=="]]
+PIGEON_BABY_R = [["  . ", "=(o>"]]
+PIGEON_BABY_L = [[" .  ", ">o)="]]
 
 # --------------------------------------------------------------------------- save / codes
 
@@ -113,7 +132,13 @@ def load_save():
     defaults = {
         "unlocked": [], "size": "small", "sound": "fart",
         "poop_mode": "single", "poop_modes": ["single"],
-        "respect_plus": 0, "best": 0,
+        "respect_plus": 0, "best": 0, "upgrades": [],
+        "equipped_upgrades": [],
+        "family_unlocked": False,
+        "family_unlocks": [],
+        "family_type": "family",
+        "gender": "male",
+        "game_mode": "timed",
         "admin_unlimited": False,
     }
     data = defaults.copy()
@@ -151,6 +176,31 @@ def load_save():
     data["poop_modes"] = sorted(({m for m in modes if isinstance(m, str) and m in mode_keys}) | {"single"})
     if data["poop_mode"] not in data["poop_modes"]:
         data["poop_mode"] = "single"
+    upgrades = data.get("upgrades", [])
+    if not isinstance(upgrades, (list, tuple, set)):
+        upgrades = []
+    upgrade_keys = {item["key"] for item in UPGRADES}
+    data["upgrades"] = sorted({u for u in upgrades if isinstance(u, str) and u in upgrade_keys})
+    equipped_upgrades = data.get("equipped_upgrades", [])
+    if not isinstance(equipped_upgrades, (list, tuple, set)):
+        equipped_upgrades = []
+    equipped_upgrades = sorted({u for u in equipped_upgrades if u in data["upgrades"]})
+    data["equipped_upgrades"] = equipped_upgrades[:1]
+    data["family_unlocked"] = bool(data.get("family_unlocked", False))
+    family_keys = {item["key"] for item in FAMILY_OPTIONS}
+    family_unlocks = data.get("family_unlocks", [])
+    if not isinstance(family_unlocks, (list, tuple, set)):
+        family_unlocks = []
+    if data["family_unlocked"]:
+        family_unlocks = set(family_unlocks) | {"family"}
+    data["family_unlocks"] = sorted({key for key in family_unlocks if key in family_keys})
+    data["family_unlocked"] = bool(data["family_unlocks"])
+    if data.get("family_type") not in data["family_unlocks"]:
+        data["family_type"] = data["family_unlocks"][0] if data["family_unlocks"] else "family"
+    if data.get("gender") not in ("male", "female"):
+        data["gender"] = "male"
+    if data.get("game_mode") not in ("timed", "endless"):
+        data["game_mode"] = "timed"
 
     for key in ("respect_plus", "best"):
         try:
@@ -172,6 +222,13 @@ def clear_user_data(save, wallet):
         "poop_modes": ["single"],
         "respect_plus": 0,
         "best": 0,
+        "upgrades": [],
+        "equipped_upgrades": [],
+        "family_unlocked": False,
+        "family_unlocks": [],
+        "family_type": "family",
+        "gender": "male",
+        "game_mode": "timed",
         "admin_unlimited": False,
     })
     wallet["money"] = 0
@@ -236,6 +293,43 @@ def label(unlock_id):
     return next(s["name"] for s in SOUNDS if s["key"] == key) + " sound"
 
 
+def redeem_random_respect_reward(save):
+    """Spend one Respect+ to unlock one random item the player lacks."""
+    if save["respect_plus"] <= 0:
+        return "Need Respect+ to claim a random reward."
+
+    rewards = []
+    for item in SIZES:
+        if "size:" + item["key"] not in save["unlocked"]:
+            rewards.append(("size", item["key"], item["name"] + " poop"))
+    for item in SOUNDS:
+        if "sound:" + item["key"] not in save["unlocked"]:
+            rewards.append(("sound", item["key"], item["name"] + " sound"))
+    for item in POOP_MODES:
+        if item["key"] not in save["poop_modes"]:
+            rewards.append(("mode", item["key"], item["name"] + " mode"))
+    for item in UPGRADES:
+        if item["key"] not in save["upgrades"]:
+            rewards.append(("upgrade", item["key"], item["name"]))
+
+    if not rewards:
+        return "All random rewards are already unlocked."
+
+    kind, key, reward_name = random.choice(rewards)
+    save["respect_plus"] -= 1
+    if kind in ("size", "sound"):
+        save["unlocked"].append(kind + ":" + key)
+        save["unlocked"] = sorted(set(save["unlocked"]))
+    elif kind == "mode":
+        save["poop_modes"].append(key)
+        save["poop_modes"] = sorted(set(save["poop_modes"]))
+    else:
+        save["upgrades"].append(key)
+        save["upgrades"] = sorted(set(save["upgrades"]))
+    write_save(save)
+    return "Respect+ reward: " + reward_name
+
+
 def redeem(save, wallet, raw):
     hashed = code_hash(raw)
     if hashed == ADMIN_CODE_HASH:
@@ -276,6 +370,25 @@ def sound_index(save):
     i = next((i for i, s in enumerate(SOUNDS) if s["key"] == save["sound"]), 0)
     return i if i in owned_sounds(save) else 0
 
+
+def family_allowed(option, gender=None):
+    """All family options are available without a character-gender choice."""
+    return True
+
+
+def family_display_name(option, gender=None):
+    """Return a short, gender-neutral shop label for a family option."""
+    key = option["key"]
+    if key == "family":
+        return "IMPRESS A PARTNER"
+    if key == "condoms":
+        return "IMPRESS A PARTNER + CONDOMS"
+    if key == "lesbian":
+        return "LESBIAN PARTNERS"
+    if key == "gay":
+        return "GAY PARTNERS"
+    return option["name"]
+
 # --------------------------------------------------------------------------- audio
 
 VOLUME = 0.1
@@ -283,6 +396,7 @@ MENU_MUSIC_VOLUME = 0.1
 BACKGROUND_MUSIC_VOLUME = 0.1
 MENU_MUSIC_FILE = "Star Wars Main Theme Cover (Handfarts).mp3"
 BACKGROUND_MUSIC_FILE = "🌿 Nature Soundscape Relaxing Bird Songs for Study & Meditation 10 Min Mix 🎶.mp3"
+ROMANTIC_MUSIC_FILE = "Romantic music sound effect.mp3"
 MAX_SIMULTANEOUS_SOUNDS = 16
 
 class Audio:
@@ -306,9 +420,10 @@ class Audio:
 
         self.menu_music_path = os.path.join(self.dir, MENU_MUSIC_FILE)
         self.background_music_path = os.path.join(self.dir, BACKGROUND_MUSIC_FILE)
+        self.romantic_music_path = os.path.join(self.dir, ROMANTIC_MUSIC_FILE)
         self.menu_volume = MENU_MUSIC_VOLUME
         self.menu_muted = False
-        for path in (self.menu_music_path, self.background_music_path):
+        for path in (self.menu_music_path, self.background_music_path, self.romantic_music_path):
             if not os.path.isfile(path):
                 raise RuntimeError("Could not find music file: %s" % path)
 
@@ -336,6 +451,14 @@ class Audio:
             pygame.mixer.music.load(self.background_music_path)
         except pygame.error as exc:
             raise RuntimeError("Could not load background music file %s: %s" % (self.background_music_path, exc)) from exc
+        pygame.mixer.music.set_volume(BACKGROUND_MUSIC_VOLUME)
+        pygame.mixer.music.play(-1)
+
+    def start_romantic_music(self):
+        try:
+            pygame.mixer.music.load(self.romantic_music_path)
+        except pygame.error as exc:
+            raise RuntimeError("Could not load romantic music file %s: %s" % (self.romantic_music_path, exc)) from exc
         pygame.mixer.music.set_volume(BACKGROUND_MUSIC_VOLUME)
         pygame.mixer.music.play(-1)
 
@@ -490,6 +613,58 @@ def make_street(w, h, gl):
         paint(x, gl - 1, "." if x % 2 else "_")
     return ["".join(row) for row in grid]
 
+
+def family_animation(stdscr, audio, save, wallet, family_option):
+    """Play the family-unlock scene in the city street."""
+    cursor(0)
+    stdscr.nodelay(False)
+    audio.start_romantic_music()
+    h, w = stdscr.getmaxyx()
+    gl = h - 2
+    bg = make_street(w, h, gl)
+    center_x = max(12, w // 2)
+    for frame in range(28):
+        stdscr.erase()
+        for r, line in enumerate(bg):
+            if line.strip():
+                put(stdscr, r, 0, line, COL["blue"] | curses.A_DIM)
+        put(stdscr, gl, 0, "=" * w, COL["green"])
+        center(stdscr, 1, "FAMILY MOMENT", COL["magenta"] | curses.A_BOLD)
+
+        if frame < 12:
+            left_x = int(center_x - 22 + frame * 1.5)
+            right_x = int(center_x + 18 - frame * 1.5)
+            put_sprite(stdscr, gl - 5, left_x, PIGEON_R[frame % 2], COL["white"] | curses.A_BOLD)
+            put_sprite(stdscr, gl - 5, right_x, PIGEON_L[frame % 2], COL["white"] | curses.A_BOLD)
+        else:
+            if family_option["key"] == "lesbian":
+                left_color, right_color = COL["magenta"], COL["magenta"]
+            elif family_option["key"] == "gay":
+                left_color, right_color = COL["white"], COL["white"]
+            else:
+                left_color, right_color = COL["white"], COL["magenta"]
+            put_sprite(stdscr, gl - 5, center_x - 6, PIGEON_R[frame % 2], left_color | curses.A_BOLD)
+            put_sprite(stdscr, gl - 5, center_x + 2, PIGEON_L[frame % 2], right_color | curses.A_BOLD)
+            center(stdscr, gl - 8, "<3", COL["red"] | curses.A_BOLD)
+            if frame >= 15:
+                center(stdscr, gl - 10, "MONEY: %s" % wallet_display(save, wallet), COL["green"] | curses.A_BOLD)
+                center(stdscr, gl - 9, "YAY I IMPRESSED!", COL["yellow"] | curses.A_BOLD)
+            if frame >= 18 and family_option["baby"]:
+                put_sprite(stdscr, gl - 2, center_x - 1, PIGEON_BABY_R, COL["cyan"] | curses.A_BOLD)
+                center(stdscr, gl - 10, "A BABY BIRD!", COL["yellow"] | curses.A_BOLD)
+
+        stdscr.refresh()
+        time.sleep(0.12)
+
+    stdscr.erase()
+    center(stdscr, h // 2 - 2, "########################", COL["red"] | curses.A_BOLD)
+    center(stdscr, h // 2, "CENSORED", COL["red"] | curses.A_BOLD)
+    center(stdscr, h // 2 + 2, "The rest we know.", COL["yellow"] | curses.A_BOLD)
+    center(stdscr, h - 2, "Press any key to continue", curses.A_DIM)
+    stdscr.refresh()
+    stdscr.getch()
+    audio.start_menu_music()
+
 # --------------------------------------------------------------------------- game
 
 class Person:
@@ -514,6 +689,7 @@ class Person:
         self.stun = 0.0
         self.dead = 0.0
         self.throws_rocks = getattr(self, "throws_rocks", False)
+        self.umbrella = getattr(self, "umbrella", False)
         self.group_id = getattr(self, "group_id", None)
         self.group_size = getattr(self, "group_size", 1)
         self.shout = ""
@@ -529,6 +705,27 @@ class Person:
         return [" " + k["head"] + " ", "/|\\", legs]
 
 
+class Boss:
+    def __init__(self, w, gl):
+        self.x = max(0.0, (w - 7) / 2)
+        self.gl = gl
+        self.hp = BOSS_HP
+        self.dir = 1
+        self.cooldown = BOSS_ROCK_COOLDOWN
+        self.anim = 0.0
+
+    def update(self, w, dt):
+        self.anim += dt
+        self.x += self.dir * BOSS_SPEED * dt
+        if self.x <= 0 or self.x >= w - 7:
+            self.x = max(0.0, min(float(w - 7), self.x))
+            self.dir *= -1
+        self.cooldown = max(0.0, self.cooldown - dt)
+
+    def rows(self):
+        return [" /!\\ ", "<BOSS>", " /|\\ "]
+
+
 def play(stdscr, save, wallet, audio):
     cursor(0)
     stdscr.nodelay(True)
@@ -537,11 +734,24 @@ def play(stdscr, save, wallet, audio):
     if w < MIN_W or h < MIN_H:
         return None
     audio.start_background_music()
+    game_mode = save.get("game_mode", "timed")
+    family_unlocked = save.get("family_unlocked", False)
+    family_type = save.get("family_type", "family") if family_unlocked else None
+    family_option = next((item for item in FAMILY_OPTIONS if item["key"] == family_type), None)
+    family_bird_count = family_option["birds"] if family_option else 1
     size_i = size_index(save)
     mode = next(m for m in POOP_MODES if m["key"] == save["poop_mode"])
-    POOP_COOLDOWN, RELOAD_COOLDOWN = 0.28, 2.0
+    equipped_upgrades = set(save.get("equipped_upgrades", []))
+    rapid_fire = "rapid_fire" in equipped_upgrades
+    fast_move = "fast_move" in equipped_upgrades
+    fast_reload = "fast_reload" in equipped_upgrades
+    shield_charges = 3 if "shield" in equipped_upgrades else 0
+    POOP_COOLDOWN = 0.14 if rapid_fire else 0.28
+    RELOAD_COOLDOWN = 0.9 if fast_reload else 2.0
+    movement_acceleration = 18 if fast_move else 14
+    movement_limit = 32 if fast_move else 24
     # Give the player enough ammo for one full selected burst.
-    MAX_AMMO = max(5, SIZES[size_i]["cost"] * mode["count"])
+    MAX_AMMO = max(5, SIZES[size_i]["cost"] * mode["count"] * family_bird_count)
 
     def layout():
         nonlocal h, w, gl, bg, clouds
@@ -568,6 +778,8 @@ def play(stdscr, save, wallet, audio):
             person.x = min(w - 3.0, max(0.0, w / 2 + (offset - (group_size - 1) / 2) * 3.0))
         index += group_size
     poops, rocks, particles, splats, floaters = [], [], [], [], []
+    boss = None
+    boss_defeated = False
     # Start each round over the middle of the skyline.
     px = max(0.0, (w - 6) / 2)
     py = (3.0 + (gl - 8.0)) / 2
@@ -605,7 +817,9 @@ def play(stdscr, save, wallet, audio):
         dt = min(0.1, now - last)
         last = now
         left = ROUND_SECS if start is None else ROUND_SECS - (now - start)
-        if left <= 0:
+        if game_mode == "endless":
+            left = float("inf")
+        if game_mode == "timed" and left <= 0:
             break
 
         # ---- input
@@ -617,9 +831,9 @@ def play(stdscr, save, wallet, audio):
             if k == curses.KEY_RESIZE:
                 layout()
             elif k in (curses.KEY_LEFT, ord("a"), ord("A")):
-                vx, face = max(-24, vx - 14), -1
+                vx, face = max(-movement_limit, vx - movement_acceleration), -1
             elif k in (curses.KEY_RIGHT, ord("d"), ord("D")):
-                vx, face = min(24, vx + 14), 1
+                vx, face = min(movement_limit, vx + movement_acceleration), 1
             elif k in (curses.KEY_UP, ord("w"), ord("W")):
                 vy = max(-11, vy - 8)
             elif k in (curses.KEY_DOWN, ord("s"), ord("S")):
@@ -651,8 +865,12 @@ def play(stdscr, save, wallet, audio):
         rock_salvo_cooldown = max(0.0, rock_salvo_cooldown - dt)
         next_rock_throw = max(0.0, next_rock_throw - dt)
         _, score_tier = score_difficulty(score)
-        difficulty_tier = min(3, score_tier + mode_hardness - 1)
+        difficulty_tier = score_tier
         difficulty_name = ("EASY", "MEDIUM", "HARDCORE", "U ARE FUCKED")[difficulty_tier]
+        if difficulty_tier >= 3 and boss is None and not boss_defeated:
+            boss = Boss(w, gl)
+            announcement = "BOSS INCOMING: THE MAYOR!"
+            announcement_time = 3.0
         if difficulty_tier != last_level:
             last_level = difficulty_tier
             announcement = "LEVEL UP: " + difficulty_name
@@ -664,6 +882,11 @@ def play(stdscr, save, wallet, audio):
         )
         while len(people) < target_people:
             people.append(Person(w))
+        if difficulty_tier >= 3:
+            for person in people:
+                if not getattr(person, "umbrella_checked", False):
+                    person.umbrella = random.random() < 0.3
+                    person.umbrella_checked = True
         if reloading and cooldown <= 0:
             ammo = MAX_AMMO
             reloading = False
@@ -671,20 +894,27 @@ def play(stdscr, save, wallet, audio):
         if want_drop and cooldown <= 0 and poop_lockout <= 0 and not reloading:
             s = SIZES[size_i]
             mode = next(m for m in POOP_MODES if m["key"] == save["poop_mode"])
-            ammo_cost = s["cost"] * mode["count"]
+            bird_positions = [(px, py)]
+            if family_option:
+                x_limit = max(1, w - 6)
+                bird_positions.append(((px - face * 7) % x_limit, py + 1.0))
+                if family_option["birds"] == 3:
+                    bird_positions.append(((px - face * 4) % x_limit, py + 3.0))
+            ammo_cost = s["cost"] * mode["count"] * len(bird_positions)
             if ammo >= ammo_cost:
                 if start is None:
                     start = now
                 ammo -= ammo_cost
                 cooldown = POOP_COOLDOWN
-                for burst_i in range(mode["count"]):
-                    poops.append(dict(
-                        x=px + (2.5 if face > 0 else 3.5) + burst_i * face * 0.8,
-                        y=py + 2.0 - burst_i * 0.2,
-                        vx=vx * 0.65 + burst_i * face * 0.7,
-                        vy=max(2.0, vy * 0.65 - burst_i * 0.2),
-                        size=size_i,
-                    ))
+                for bird_x, bird_y in bird_positions:
+                    for burst_i in range(mode["count"]):
+                        poops.append(dict(
+                            x=bird_x + (2.5 if face > 0 else 3.5) + burst_i * face * 0.8,
+                            y=bird_y + 2.0 - burst_i * 0.2,
+                            vx=vx * 0.65 + burst_i * face * 0.7,
+                            vy=max(2.0, vy * 0.65 - burst_i * 0.2),
+                            size=size_i,
+                        ))
                 audio.play_pack(save["sound"], size_i)
                 if ammo < ammo_cost:
                     reloading = True
@@ -713,6 +943,24 @@ def play(stdscr, save, wallet, audio):
             if p.x > w + 1 or p.x < -4:
                 p.respawn(w, edge=-p.dir)
 
+        if boss is not None:
+            boss.update(w, dt)
+            if boss.cooldown <= 0:
+                ox, oy = boss.x + 3.0, gl - 4.0
+                tx, ty = px + 2.5 + vx * 0.6, py + 1.0 + vy * 0.6
+                dx, dy = tx - ox, ty - oy
+                distance = math.hypot(dx, dy) or 1.0
+                flight_time = min(1.5, max(0.65, distance / (ROCK_SPEED + 6)))
+                rocks.append(dict(
+                    x=ox,
+                    y=oy,
+                    vx=dx / flight_time,
+                    vy=dy / flight_time - 0.5 * ROCK_GRAVITY * flight_time,
+                    life=ROCK_LIFE,
+                    damage=BOSS_ROCK_DAMAGE,
+                ))
+                boss.cooldown = BOSS_ROCK_COOLDOWN
+
         closest = min(
             (min(abs((p.x + 1.5) - (px + 2.5)),
                  w - abs((p.x + 1.5) - (px + 2.5)))
@@ -738,9 +986,15 @@ def play(stdscr, save, wallet, audio):
             poop["y"] += poop["vy"] * dt
             s = SIZES[poop["size"]]
             hit = None
+            boss_hit = None
             for p in people:
                 if p.dead > 0 or p.stun > 0:
                     continue
+                if p.umbrella and segment_hits_rect(
+                        previous_x, previous_y, poop["x"], poop["y"],
+                        p.x - 1.0, gl - 5.5, p.x + 4.0, gl - 4.0):
+                    hit = "umbrella"
+                    break
                 # Include the head, torso, and legs.  Keep the horizontal
                 # bounds at the actual three-column body so neighbors do not
                 # share hitboxes.
@@ -750,11 +1004,30 @@ def play(stdscr, save, wallet, audio):
                         p.x + 3.0, gl + PERSON_HIT_VERTICAL_MARGIN):
                     hit = p
                     break
-            if hit or poop["y"] >= gl - 1:
+            if hit is None and boss is not None and segment_hits_rect(
+                    previous_x, previous_y, poop["x"], poop["y"],
+                    boss.x, gl - 6.0, boss.x + 7.0, gl - 3.0):
+                boss_hit = boss
+            if hit or boss_hit or poop["y"] >= gl - 1:
                 poops.remove(poop)
                 for _ in range(4 + 3 * poop["size"]):
                     particles.append([poop["x"], min(poop["y"], gl - 2), random.uniform(-12, 12),
                                       random.uniform(-14, -3), 0.5, random.choice(".,*'`")])
+                if hit == "umbrella":
+                    splats.append([poop["x"], "UMBRELLA!", 0.8])
+                    continue
+                if boss_hit:
+                    boss_hit.hp -= 1 + poop["size"] * 2
+                    floaters.append([boss_hit.x + 2, gl - 8.0, "BOSS HIT!", 0.8])
+                    if boss_hit.hp <= 0:
+                        boss_defeated = True
+                        boss = None
+                        score += 500
+                        wallet["money"] += 250
+                        write_wallet(wallet["money"])
+                        announcement = "THE MAYOR IS DOWN! +$250"
+                        announcement_time = 3.0
+                    continue
                 if hit:
                     # One person cannot pad the same combo twice in one frame.
                     if id(hit) not in direct_hit_people:
@@ -876,11 +1149,18 @@ def play(stdscr, save, wallet, audio):
             low_altitude = max(0.0, min(1.0, (py - (gl - 8 - LOW_ALTITUDE_BAND)) / LOW_ALTITUDE_BAND))
             hitbox_x = LOW_ALTITUDE_HITBOX_X * low_altitude
             hitbox_y = LOW_ALTITUDE_HITBOX_Y * low_altitude
+            rock_hits_player = segment_hits_rect(
+                previous_x, previous_y, rock["x"], rock["y"],
+                px - 0.5 - hitbox_x, py - 0.5 - hitbox_y,
+                px + 5.5 + hitbox_x, py + 2.5 + hitbox_y)
+            if rock_hits_player and shield_charges > 0:
+                rocks.remove(rock)
+                shield_charges -= 1
+                announcement = "SHIELD BLOCKED ROCK! %d LEFT" % shield_charges
+                announcement_time = 1.2
+                continue
             if ((not reloading) and hurt_iframes <= 0 and
-                    segment_hits_rect(
-                        previous_x, previous_y, rock["x"], rock["y"],
-                        px - 0.5 - hitbox_x, py - 0.5 - hitbox_y,
-                        px + 5.5 + hitbox_x, py + 2.5 + hitbox_y)):
+                    rock_hits_player):
                 rocks.remove(rock)
                 hurt_iframes = ROCK_HIT_IFRAMES
                 poop_lockout = POOP_HIT_LOCKOUT
@@ -909,9 +1189,29 @@ def play(stdscr, save, wallet, audio):
         for p in people:
             k = Person.KINDS[p.kind]
             attr = COL[k["color"]] | (curses.A_BOLD if p.kind == "vip" else 0)
+            if p.umbrella:
+                put(stdscr, gl - 5, int(p.x) - 1, "___", COL["cyan"] | curses.A_BOLD)
             put_sprite(stdscr, gl - 3, int(p.x), p.rows(), attr)
             if (p.dead > 0 or p.stun > 0) and p.shout:
                 put(stdscr, gl - 4, int(p.x + 1.5 - len(p.shout) / 2), p.shout, COL["red"] | curses.A_BOLD)
+        if family_unlocked:
+            x_limit = max(1, w - 6)
+            partner_x = (px - face * 7) % x_limit
+            baby_x = (px - face * 4) % x_limit
+            partner_frames = PIGEON_R if face > 0 else PIGEON_L
+            if family_type == "lesbian":
+                main_color, partner_color = COL["magenta"], COL["magenta"]
+            elif family_type == "gay":
+                main_color, partner_color = COL["white"], COL["white"]
+            else:
+                main_color, partner_color = COL["white"], COL["magenta"]
+            put_sprite(stdscr, int(py) + 1, int(partner_x), partner_frames[int(flap) % 2], partner_color | curses.A_BOLD)
+            if family_option["baby"]:
+                baby_frames = PIGEON_BABY_R if face > 0 else PIGEON_BABY_L
+                put_sprite(stdscr, int(py) + 3, int(baby_x), baby_frames, COL["cyan"] | curses.A_BOLD)
+        if boss is not None:
+            put_sprite(stdscr, gl - 6, int(boss.x), boss.rows(), COL["red"] | curses.A_BOLD)
+            put(stdscr, gl - 7, int(boss.x), "HP %02d" % boss.hp, COL["red"] | curses.A_BOLD)
         for poop in poops:
             g = SIZES[poop["size"]]["glyph"]
             put(stdscr, int(poop["y"]), int(poop["x"] - len(g) / 2), g, COL["yellow"] | curses.A_BOLD)
@@ -937,7 +1237,10 @@ def play(stdscr, save, wallet, audio):
         for f in floaters:
             put(stdscr, int(f[1]), int(f[0]), f[2], COL["yellow"] | curses.A_BOLD)
         frames = PIGEON_R if face > 0 else PIGEON_L
-        put_sprite(stdscr, int(py), int(px), frames[int(flap) % 2], COL["white"] | curses.A_BOLD)
+        main_color = COL["white"]
+        if family_unlocked and family_type == "lesbian":
+            main_color = COL["magenta"]
+        put_sprite(stdscr, int(py), int(px), frames[int(flap) % 2], main_color | curses.A_BOLD)
         if hit_notice > 0:
             put(stdscr, max(2, int(py) - 1), int(px) - 2, "-10 HP  -10 SCORE", COL["red"] | curses.A_BOLD)
 
@@ -946,7 +1249,8 @@ def play(stdscr, save, wallet, audio):
         put(stdscr, 0, 24, difficulty_name[:14], COL["magenta"] | curses.A_BOLD)
         hp_attr = (COL["red"] | curses.A_BOLD) if player_hp <= ROCK_HIT_DAMAGE else (COL["green"] | curses.A_BOLD)
         put(stdscr, 0, 41, "HP %03d" % player_hp, hp_attr)
-        put(stdscr, 0, 51, "TIME %03d" % math.ceil(left), COL["white"] | curses.A_BOLD)
+        time_text = "TIME INF" if game_mode == "endless" else "TIME %03d" % math.ceil(left)
+        put(stdscr, 0, 51, time_text, COL["white"] | curses.A_BOLD)
         if retaliation_banner > 0:
             center(stdscr, 2, "POOPED PEOPLE ARE THROWING ROCKS - DODGE!", COL["red"] | curses.A_BOLD)
         if announcement_time > 0:
@@ -966,6 +1270,8 @@ def play(stdscr, save, wallet, audio):
             cd_text = "RELOAD %.1fs" % cooldown if reloading else ("CD %.1fs" % cooldown if cooldown > 0 else "CD READY")
         put(stdscr, 1, 18, cd_text, cd_attr)
         put(stdscr, 1, 34, "RESPECT+ %d" % save["respect_plus"], COL["red"] | curses.A_BOLD)
+        if shield_charges:
+            put(stdscr, 1, 52, "SHIELD %d" % shield_charges, COL["cyan"] | curses.A_BOLD)
         put(stdscr, h - 1, 1, "arrows/WASD fly   SPACE poop   Q menu", curses.A_DIM)
         stdscr.refresh()
 
@@ -1027,7 +1333,13 @@ def enter_code(stdscr, save, wallet):
 
 def market(stdscr, save, wallet, audio):
     row = 0
+    market_msg = ""
     size_i, sound_i = size_index(save), sound_index(save)
+    upgrade_i = 0
+    family_i = next(
+        (i for i, option in enumerate(FAMILY_OPTIONS) if option["key"] == save["family_type"]),
+        0,
+    )
     amount_i = next(
         (i for i, mode in enumerate(POOP_MODES) if mode["key"] == save["poop_mode"]),
         0,
@@ -1037,6 +1349,7 @@ def market(stdscr, save, wallet, audio):
         h, _ = stdscr.getmaxyx()
         cy = h // 2 - 8
         amount = POOP_MODES[amount_i]
+        family_option = FAMILY_OPTIONS[family_i]
         center(stdscr, cy, "MARKET", COL["yellow"] | curses.A_BOLD)
         center(stdscr, cy + 1, "Wallet: %s" % wallet_display(save, wallet),
                COL["green"] | curses.A_BOLD)
@@ -1044,13 +1357,34 @@ def market(stdscr, save, wallet, audio):
             ("SIZE", SIZES[size_i]["name"], size_i in owned_sizes(save), SIZE_PRICES[SIZES[size_i]["key"]]),
             ("SOUND", SOUNDS[sound_i]["name"], sound_i in owned_sounds(save), SOUND_PRICES[SOUNDS[sound_i]["key"]]),
             ("AMOUNT", amount["name"], amount["key"] in save["poop_modes"], amount["cost"]),
+            ("UPGRADE", UPGRADES[upgrade_i]["name"], UPGRADES[upgrade_i]["key"] in save["upgrades"], UPGRADES[upgrade_i]["price"]),
+            ("RESPECT+", "Random Reward", save["respect_plus"] > 0, 1),
+            ("FAMILY", family_display_name(family_option), family_option["key"] in save["family_unlocks"], family_option["price"]),
         ]
         for i, (kind, value, owned, price) in enumerate(rows):
-            selectable_value = i < 3
+            selectable_value = i < 6
             displayed_value = "< %s >" % value if selectable_value else value
+            if kind == "RESPECT+":
+                status = "AVAILABLE" if owned else "NEED RESPECT+"
+            elif kind == "FAMILY":
+                status = "EQUIPPED" if owned and family_option["key"] == save["family_type"] else ("OWNED" if owned else "$%d" % price)
+            elif owned:
+                if kind == "SIZE":
+                    equipped = save["size"] == SIZES[size_i]["key"]
+                elif kind == "SOUND":
+                    equipped = save["sound"] == SOUNDS[sound_i]["key"]
+                elif kind == "AMOUNT":
+                    equipped = save["poop_mode"] == POOP_MODES[amount_i]["key"]
+                else:
+                    equipped = UPGRADES[upgrade_i]["key"] in save["equipped_upgrades"]
+                status = "EQUIPPED" if equipped else "OWNED"
+            else:
+                status = "$%d" % price
             label_text = "%s %s: %s - %s" % (
-                ">" if i == row else " ", kind, displayed_value, "OWNED" if owned else "$%d" % price)
+                ">" if i == row else " ", kind, displayed_value, status)
             center(stdscr, cy + 3 + i, label_text, curses.A_BOLD if i == row else 0)
+        if market_msg:
+            center(stdscr, cy + 9, market_msg, COL["green"] | curses.A_BOLD)
         center(stdscr, cy + 10, "Left/right select   Enter buy/use   C redeem   Esc back", curses.A_DIM)
         center(stdscr, cy + 11, "Current: %s (%d at a time)" % (amount["name"], amount["count"]), COL["cyan"])
         stdscr.refresh()
@@ -1068,6 +1402,10 @@ def market(stdscr, save, wallet, audio):
                 audio.play(sound_i, size_i)
             elif row == 2:
                 amount_i = (amount_i + step) % len(POOP_MODES)
+            elif row == 3:
+                upgrade_i = (upgrade_i + step) % len(UPGRADES)
+            elif row == 5:
+                family_i = (family_i + step) % len(FAMILY_OPTIONS)
         elif k in (10, 13, curses.KEY_ENTER, ord(" ")):
             if row == 0:
                 item, owned, price = SIZES[size_i], size_i in owned_sizes(save), SIZE_PRICES[SIZES[size_i]["key"]]
@@ -1094,7 +1432,42 @@ def market(stdscr, save, wallet, audio):
                         save["poop_modes"].append(selected["key"])
                     save["poop_mode"] = selected["key"]
                     write_save(save)
-                    audio.play_pack(selected["sound"], size_i)
+            elif row == 3:
+                selected = UPGRADES[upgrade_i]
+                key = selected["key"]
+                if key not in save["upgrades"]:
+                    if can_afford(save, wallet, selected["price"]):
+                        spend_wallet(save, wallet, selected["price"])
+                        save["upgrades"].append(key)
+                        save["upgrades"] = sorted(set(save["upgrades"]))
+                        save["equipped_upgrades"] = [key]
+                        market_msg = selected["name"] + " purchased and equipped."
+                elif key in save["equipped_upgrades"]:
+                    save["equipped_upgrades"] = []
+                    market_msg = selected["name"] + " unequipped."
+                else:
+                    save["equipped_upgrades"] = [key]
+                    market_msg = selected["name"] + " equipped."
+                write_save(save)
+            elif row == 4:
+                market_msg = redeem_random_respect_reward(save)
+            elif row == 5:
+                selected = FAMILY_OPTIONS[family_i]
+                key = selected["key"]
+                if key not in save["family_unlocks"]:
+                    if can_afford(save, wallet, selected["price"]):
+                        spend_wallet(save, wallet, selected["price"])
+                        save["family_unlocks"].append(key)
+                        save["family_unlocks"] = sorted(set(save["family_unlocks"]))
+                        save["family_unlocked"] = True
+                        save["family_type"] = key
+                        write_save(save)
+                        family_animation(stdscr, audio, save, wallet, selected)
+                else:
+                    save["family_unlocked"] = True
+                    save["family_type"] = key
+                    write_save(save)
+                    family_animation(stdscr, audio, save, wallet, selected)
         elif k in (ord("c"), ord("C")):
             enter_code(stdscr, save, wallet)
         elif k in (27, ord("q"), ord("Q")):
@@ -1122,7 +1495,7 @@ def confirm_clear_user_data(stdscr, save, wallet):
 
 
 def menu(stdscr, save, wallet, audio):
-    items = ["PLAY", "MARKET", "AUDIO", "CLEAR USER DATA", "QUIT"]
+    items = ["PLAY", "MARKET", "AUDIO", "MODE", "CLEAR USER DATA", "QUIT"]
     sel, msg = 0, ""
     audio.start_menu_music()
     while True:
@@ -1131,20 +1504,26 @@ def menu(stdscr, save, wallet, audio):
         cursor(0)
         stdscr.erase()
         h, w = stdscr.getmaxyx()
-        top = max(0, h // 2 - 10)
+        # Keep the menu compact enough for the game's minimum 20-line terminal.
+        top = max(0, h // 2 - 9)
         for i, line in enumerate(TITLE):
             center(stdscr, top + i, line, COL["white"] | curses.A_BOLD)
         center(stdscr, top + len(TITLE) + 1, "shit on people.", curses.A_DIM)
         labels = items[:]
         labels[2] = "AUDIO: MUTED" if audio.menu_muted else "AUDIO: %d%%" % round(audio.menu_volume * 100)
+        labels[3] = "MODE: ENDLESS" if save["game_mode"] == "endless" else "MODE: TIME LIMIT"
         for i in range(2):
-            text = ("> %s <" % labels[i]) if i == sel else labels[i]
-            center(stdscr, top + 8 + i * 2, text, (COL["yellow"] | curses.A_BOLD) if i == sel else 0)
+            if i == 0:
+                text = "[>>> PLAY <<<]" if i == sel else "[   PLAY   ]"
+            else:
+                text = ("> %s <" % labels[i]) if i == sel else labels[i]
+            center(stdscr, top + 8 + i, text, (COL["yellow"] | curses.A_BOLD) if i == sel else 0)
         row_labels = []
-        for i in range(2, 5):
+        for i in range(2, 6):
             text = ("> %s <" % labels[i]) if i == sel else labels[i]
             row_labels.append(text)
-        row_gap = 4
+        # Keep the four controls on one line even when a long label is selected.
+        row_gap = 2
         row_width = sum(len(text) for text in row_labels) + row_gap * (len(row_labels) - 1)
         row_x = max(0, (w - row_width) // 2)
         for text in row_labels:
@@ -1152,11 +1531,13 @@ def menu(stdscr, save, wallet, audio):
                 (COL["yellow"] | curses.A_BOLD) if text.startswith("> ") else 0)
             row_x += len(text) + row_gap
         if msg:
-            center(stdscr, top + 18, msg, COL["red"] | curses.A_BOLD)
+            center(stdscr, top + 15, msg, COL["red"] | curses.A_BOLD)
         elif sel == 2:
-            center(stdscr, top + 18, "Left/Right: volume   Enter: mute/unmute", curses.A_DIM)
+            center(stdscr, top + 15, "Left/Right: volume   Enter: mute/unmute", curses.A_DIM)
+        elif sel == 3:
+            center(stdscr, top + 15, "Left/Right or Enter: switch mode", curses.A_DIM)
         else:
-            center(stdscr, top + 18, "Best: %d   Wallet: %s" % (save["best"], wallet_display(save, wallet)), COL["magenta"])
+            center(stdscr, top + 15, "Best: %d   Wallet: %s" % (save["best"], wallet_display(save, wallet)), COL["magenta"])
         stdscr.refresh()
 
         k = stdscr.getch()
@@ -1169,9 +1550,12 @@ def menu(stdscr, save, wallet, audio):
             audio.adjust_menu_volume(-0.05)
         elif sel == 2 and k in (curses.KEY_RIGHT, ord("+"), ord("=")):
             audio.adjust_menu_volume(0.05)
+        elif sel == 3 and k in (curses.KEY_LEFT, curses.KEY_RIGHT, ord("-"), ord("+"), ord("=")):
+            save["game_mode"] = "endless" if save["game_mode"] == "timed" else "timed"
+            write_save(save)
         elif k in (10, 13, curses.KEY_ENTER):
             act = sel
-        elif ord("1") <= k <= ord("5"):
+        elif ord("1") <= k <= ord("6"):
             act = k - ord("1")
         elif k in (ord("q"), ord("Q"), 27):
             return
@@ -1184,8 +1568,11 @@ def menu(stdscr, save, wallet, audio):
         elif act == 2:
             audio.toggle_menu_mute()
         elif act == 3:
-            msg = confirm_clear_user_data(stdscr, save, wallet)
+            save["game_mode"] = "endless" if save["game_mode"] == "timed" else "timed"
+            write_save(save)
         elif act == 4:
+            msg = confirm_clear_user_data(stdscr, save, wallet)
+        elif act == 5:
             return
 
 
