@@ -136,6 +136,7 @@ def load_save():
         "respect_plus": 0, "best": 0, "upgrades": [],
         "equipped_upgrades": [],
         "family_unlocked": False,
+        "family_divorced": False,
         "family_unlocks": [],
         "family_type": "family",
         "gender": "male",
@@ -195,7 +196,8 @@ def load_save():
     if data["family_unlocked"]:
         family_unlocks = set(family_unlocks) | {"family"}
     data["family_unlocks"] = sorted({key for key in family_unlocks if key in family_keys})
-    data["family_unlocked"] = bool(data["family_unlocks"])
+    data["family_divorced"] = bool(data.get("family_divorced", False))
+    data["family_unlocked"] = bool(data["family_unlocks"]) and not data["family_divorced"]
     if data.get("family_type") not in data["family_unlocks"]:
         data["family_type"] = data["family_unlocks"][0] if data["family_unlocks"] else "family"
     if data.get("gender") not in ("male", "female"):
@@ -226,6 +228,7 @@ def clear_user_data(save, wallet):
         "upgrades": [],
         "equipped_upgrades": [],
         "family_unlocked": False,
+        "family_divorced": False,
         "family_unlocks": [],
         "family_type": "family",
         "gender": "male",
@@ -237,12 +240,22 @@ def clear_user_data(save, wallet):
     write_wallet(wallet["money"])
 
 
-def write_save(save):
+def write_json_atomic(path, payload):
+    """Write a small save file atomically so purchases survive interruptions."""
+    temp_path = path + ".tmp"
     try:
-        with open(SAVE_PATH, "w", encoding="utf-8") as f:
-            json.dump(save, f)
+        with open(temp_path, "w", encoding="utf-8") as f:
+            json.dump(payload, f)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(temp_path, path)
+        return True
     except OSError:
-        pass
+        return False
+
+
+def write_save(save):
+    return write_json_atomic(SAVE_PATH, save)
 
 
 def wallet_hash(money):
@@ -266,11 +279,7 @@ def load_wallet():
 def write_wallet(money):
     payload = {"money": max(0, int(money))}
     payload["hash"] = wallet_hash(payload["money"])
-    try:
-        with open(WALLET_PATH, "w", encoding="utf-8") as f:
-            json.dump(payload, f)
-    except OSError:
-        pass
+    return write_json_atomic(WALLET_PATH, payload)
 
 
 def wallet_display(save, wallet):
@@ -1504,6 +1513,8 @@ def market(stdscr, save, wallet, audio):
                     else:
                         lost_points = save["best"] // 2
                         save["best"] -= lost_points
+                        save["family_unlocked"] = False
+                        save["family_divorced"] = True
                         write_save(save)
                         market_msg = "DIVORCED! -%d POINTS" % lost_points
                 elif key not in save["family_unlocks"]:
@@ -1512,11 +1523,13 @@ def market(stdscr, save, wallet, audio):
                         save["family_unlocks"].append(key)
                         save["family_unlocks"] = sorted(set(save["family_unlocks"]))
                         save["family_unlocked"] = True
+                        save["family_divorced"] = False
                         save["family_type"] = key
                         write_save(save)
                         family_animation(stdscr, audio, save, wallet, selected)
                 else:
                     save["family_unlocked"] = True
+                    save["family_divorced"] = False
                     save["family_type"] = key
                     write_save(save)
                     family_animation(stdscr, audio, save, wallet, selected)
