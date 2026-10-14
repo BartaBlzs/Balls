@@ -1,0 +1,14 @@
+# Python-generated files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Local tooling and operating-system files
+.DS_Store
+.idea/
+.vscode/
