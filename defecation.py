@@ -58,7 +58,7 @@ BOSS_HP = 12
 BOSS_SPEED = 5.0
 BOSS_ROCK_COOLDOWN = 1.8
 BOSS_ROCK_DAMAGE = 15
-FAMILY_PRICE = 10000
+FAMILY_PRICE = 2500
 
 # --------------------------------------------------------------------------- content
 
@@ -76,27 +76,27 @@ SOUNDS = [
 ]
 POOP_MODES = [
     dict(key="single", name="Single", count=1, cost=0, sound="fart"),
-    dict(key="double", name="Double", count=2, cost=1500, sound="fart1"),
-    dict(key="triple", name="Triple", count=3, cost=2500, sound="fart2"),
-    dict(key="shower", name="Shower", count=5, cost=5000, sound="fart2"),
+    dict(key="double", name="Double", count=2, cost=300, sound="fart1"),
+    dict(key="triple", name="Triple", count=3, cost=600, sound="fart2"),
+    dict(key="shower", name="Shower", count=5, cost=1000, sound="fart2"),
 ]
-SIZE_PRICES = {"small": 1200, "medium": 2200, "large": 3500, "mega": 6000}
-SOUND_PRICES = {"fart": 1200, "fart1": 1800, "fart2": 2600}
+SIZE_PRICES = {"small": 300, "medium": 600, "large": 1000, "mega": 1800}
+SOUND_PRICES = {"fart": 300, "fart1": 500, "fart2": 750}
 UPGRADES = [
-    dict(key="shield", name="Shield", price=5000),
-    dict(key="rapid_fire", name="Rapid-fire Laxative", price=6500),
-    dict(key="fast_move", name="Faster Pigeon Movement", price=4500),
-    dict(key="fast_reload", name="Faster Reload", price=4500),
+    dict(key="shield", name="Shield", price=800),
+    dict(key="rapid_fire", name="Rapid-fire Laxative", price=1100),
+    dict(key="fast_move", name="Faster Pigeon Movement", price=700),
+    dict(key="fast_reload", name="Faster Reload", price=700),
 ]
 FAMILY_OPTIONS = [
     dict(key="family", name="IM-PRESS HERE", price=FAMILY_PRICE, birds=3, partner="pink", baby=True, gender=None),
-    dict(key="condoms", name="IM-PRESS HERE + CONDOMS", price=FAMILY_PRICE + 5000, birds=2, partner="pink", baby=False),
-    dict(key="lesbian", name="LESBIAN", price=15000, birds=2, partner="pink", baby=False, gender="female"),
-    dict(key="gay", name="GAY", price=15000, birds=2, partner="white", baby=False, gender="male"),
+    dict(key="condoms", name="IM-PRESS HERE + CONDOMS", price=4000, birds=2, partner="pink", baby=False),
+    dict(key="lesbian", name="LESBIAN", price=3500, birds=2, partner="pink", baby=False, gender="female"),
+    dict(key="gay", name="GAY", price=3500, birds=2, partner="white", baby=False, gender="male"),
     dict(key="divorce", name="DIVORCE", price=0, birds=1, partner=None, baby=False, action="divorce"),
 ]
 FREE = {"size:small", "sound:fart"}
-CODE_REDEEM_COST = 1000
+CODE_REDEEM_COST = 250
 ADMIN_WALLET_AMOUNT = 999999999
 ADMIN_CODE_HASH = "395fcfb4f94a19b6242902470f4c80cca48eed86fdd65e60c2325339066a9edd"
 
@@ -104,8 +104,11 @@ ADMIN_CODE_HASH = "395fcfb4f94a19b6242902470f4c80cca48eed86fdd65e60c2325339066a9
 CODES = {
     "9a9ecd556d5eb0f4b3402d2e81ae6f7913f4d5f0eb07fc411a4d85483cce133f": ["size:medium", "sound:fart1"], # PIGEON-PLUS
     "6bde136c8ac436b7ba67415a436d3a7000a62ebdb4b95c10ffa1a4c26aaf4007": ["sound:fart2"],                # SQUELCH-ME
-    "025a44c68d135721dbd332b1e0406091ab36ca3388dc21c340f666786953abe1": ["size:large"],                # BIG-ONE
-    "74413f038c81ed7c50b744a156200abeb6e9307e1edd2591be14d1d7bd8ed29b": ["size:mega", "sound:fart2"],  # BOMBS-AWAY
+    "025a44c68d135721dbd332b1e0406091ab36ca3388dc21c340f666786953abe1": ["size:large"],                # BIG-ONE #      These codes should not be stored here, because
+    "74413f038c81ed7c50b744a156200abeb6e9307e1edd2591be14d1d7bd8ed29b": ["size:mega", "sound:fart2"],  # BOMBS-AWAY #   the code goes to github, so this is just for the sake of the game jam
+}
+FIXED_MONEY_CODES = {
+    "1c340de5b1a24a61ebf542a2ebb7662d926e047d66f8522f60a0b80b48e253ef": 10000,
 }
 
 SHOUTS = ["EW!", "MY HAT!", "WHY ME?!", "NOOOO!", "GROSS!", "AGAIN?!", "#$%@!", "MY SUIT!", "SERIOUSLY?!"]
@@ -144,6 +147,9 @@ def load_save():
         "gender": "male",
         "game_mode": "timed",
         "admin_unlimited": False,
+        "redeemed_money_codes": [],
+        "audio_volume": MENU_MUSIC_VOLUME,
+        "audio_muted": False,
     }
     data = defaults.copy()
     try:
@@ -213,6 +219,18 @@ def load_save():
         except (ValueError, TypeError, OverflowError):
             data[key] = 0
     data["admin_unlimited"] = bool(data.get("admin_unlimited", False))
+    try:
+        data["audio_volume"] = max(0.0, min(1.0, float(data.get("audio_volume", MENU_MUSIC_VOLUME))))
+    except (TypeError, ValueError, OverflowError):
+        data["audio_volume"] = MENU_MUSIC_VOLUME
+    data["audio_muted"] = bool(data.get("audio_muted", False))
+    redeemed_money_codes = data.get("redeemed_money_codes", [])
+    if not isinstance(redeemed_money_codes, (list, tuple, set)):
+        redeemed_money_codes = []
+    data["redeemed_money_codes"] = sorted({
+        code for code in redeemed_money_codes
+        if isinstance(code, str)
+    })
     data.pop("respect", None)
     return data
 
@@ -236,6 +254,9 @@ def clear_user_data(save, wallet):
         "gender": "male",
         "game_mode": "timed",
         "admin_unlimited": False,
+        "redeemed_money_codes": [],
+        "audio_volume": MENU_MUSIC_VOLUME,
+        "audio_muted": False,
     })
     wallet["money"] = 0
     write_save(save)
@@ -384,6 +405,14 @@ def redeem(save, wallet, raw):
         write_wallet(wallet["money"])
         return True, "Admin mode enabled: unlimited money."
 
+    fixed_amount = FIXED_MONEY_CODES.get(hashed)
+    if fixed_amount is not None:
+        wallet["money"] += fixed_amount
+        if not write_wallet(wallet["money"]):
+            wallet["money"] -= fixed_amount
+            return False, "Could not save the money reward."
+        return True, "Money code redeemed: +$%d" % fixed_amount
+
     generated = load_generated_codes()
     generated_entry = generated.get(hashed)
     if generated_entry is not None:
@@ -468,7 +497,7 @@ ROMANTIC_MUSIC_FILE = "Romantic music sound effect.mp3"
 MAX_SIMULTANEOUS_SOUNDS = 16
 
 class Audio:
-    def __init__(self):
+    def __init__(self, save):
         self.dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "audio")
         try:
             pygame.mixer.init()
@@ -489,8 +518,9 @@ class Audio:
         self.menu_music_path = os.path.join(self.dir, MENU_MUSIC_FILE)
         self.background_music_path = os.path.join(self.dir, BACKGROUND_MUSIC_FILE)
         self.romantic_music_path = os.path.join(self.dir, ROMANTIC_MUSIC_FILE)
-        self.menu_volume = MENU_MUSIC_VOLUME
-        self.menu_muted = False
+        self.save = save
+        self.menu_volume = save["audio_volume"]
+        self.menu_muted = save["audio_muted"]
         for path in (self.menu_music_path, self.background_music_path, self.romantic_music_path):
             if not os.path.isfile(path):
                 raise RuntimeError("Could not find music file: %s" % path)
@@ -508,10 +538,14 @@ class Audio:
 
     def adjust_menu_volume(self, delta):
         self.menu_volume = max(0.0, min(1.0, self.menu_volume + delta))
+        self.save["audio_volume"] = self.menu_volume
+        write_save(self.save)
         self._apply_menu_volume()
 
     def toggle_menu_mute(self):
         self.menu_muted = not self.menu_muted
+        self.save["audio_muted"] = self.menu_muted
+        write_save(self.save)
         self._apply_menu_volume()
 
     def start_background_music(self):
@@ -519,7 +553,7 @@ class Audio:
             pygame.mixer.music.load(self.background_music_path)
         except pygame.error as exc:
             raise RuntimeError("Could not load background music file %s: %s" % (self.background_music_path, exc)) from exc
-        pygame.mixer.music.set_volume(BACKGROUND_MUSIC_VOLUME)
+        self._apply_menu_volume()
         pygame.mixer.music.play(-1)
 
     def start_romantic_music(self):
@@ -527,7 +561,7 @@ class Audio:
             pygame.mixer.music.load(self.romantic_music_path)
         except pygame.error as exc:
             raise RuntimeError("Could not load romantic music file %s: %s" % (self.romantic_music_path, exc)) from exc
-        pygame.mixer.music.set_volume(BACKGROUND_MUSIC_VOLUME)
+        self._apply_menu_volume()
         pygame.mixer.music.play(-1)
 
     def stop_background_music(self):
@@ -542,7 +576,7 @@ class Audio:
         if sound is None:
             curses.beep()
             return
-        sound.set_volume(max(0.0, min(1.0, VOLUME)))
+        sound.set_volume(0.0 if self.menu_muted else self.menu_volume)
         sound.play()
 
     def play_pack(self, pack, size_i):
@@ -737,9 +771,9 @@ def family_animation(stdscr, audio, save, wallet, family_option):
 
 class Person:
     KINDS = {
-        "normal": dict(head="o", mult=1, speed=(4, 8),   color="green"),
-        "chunky": dict(head="O", mult=1, speed=(3, 5),   color="cyan"),
-        "vip":    dict(head="$", mult=3, speed=(9, 13),  color="magenta"),
+        "normal": dict(head="o", mult=1, speed=(4, 8),   color="green",   money=10),
+        "chunky": dict(head="O", mult=1, speed=(3, 5),   color="blue",    money=20),
+        "vip":    dict(head="$", mult=3, speed=(9, 13),  color="magenta", money=30),
     }
 
     def __init__(self, w, edge=None):
@@ -1126,15 +1160,22 @@ def play(stdscr, save, wallet, audio):
                         proximity_mult = 2 if distance <= NEAR_PERSON_DISTANCE else 1
                         gained = PERSON_HIT_POINTS * Person.KINDS[victim.kind]["mult"] * proximity_mult
                         score += gained
-                        new_tier = score // 30
-                        if new_tier > reward_tier:
-                            bonus = (new_tier - reward_tier) * 5
-                            reward_tier = new_tier
+                        if game_mode == "timed":
+                            bonus = Person.KINDS[victim.kind]["money"]
                             wallet["money"] += bonus
                             write_wallet(wallet["money"])
                             reward_flash = 1.5
                             floaters.append([px + 1, max(2.0, py - 1.0), "+$%d" % bonus, 1.1])
-                        floaters.append([victim.x + 1, gl - 5.0, "+%d$" % gained, 1.0])
+                        else:
+                            new_tier = score // 30
+                            if new_tier > reward_tier:
+                                bonus = (new_tier - reward_tier) * 5
+                                reward_tier = new_tier
+                                wallet["money"] += bonus
+                                write_wallet(wallet["money"])
+                                reward_flash = 1.5
+                                floaters.append([px + 1, max(2.0, py - 1.0), "+$%d" % bonus, 1.1])
+                        floaters.append([victim.x + 1, gl - 5.0, "+%d SCORE" % gained, 1.0])
                         victim.shout = random.choice(VIP_SHOUTS if victim.kind == "vip" else SHOUTS)
                         victim.throws_rocks = True
                         rock_throw_queue.append(victim)
@@ -1348,7 +1389,7 @@ def play(stdscr, save, wallet, audio):
             main_color = COL["magenta"]
         put_sprite(stdscr, int(py), int(px), frames[int(flap) % 2], main_color | curses.A_BOLD)
         if hit_notice > 0:
-            put(stdscr, max(2, int(py) - 1), int(px) - 2, "-10 HP  -10 SCORE", COL["red"] | curses.A_BOLD)
+            put(stdscr, max(2, int(py) - 1), int(px) - 2, "ROCK HIT: -10 HP  -10 SCORE", COL["red"] | curses.A_BOLD)
 
         put(stdscr, 0, 1, "SCORE %05d" % score, COL["yellow"] | curses.A_BOLD)
         put(stdscr, 0, 16, "LV %d" % (difficulty_tier + 1), COL["magenta"] | curses.A_BOLD)
@@ -1362,7 +1403,8 @@ def play(stdscr, save, wallet, audio):
         if announcement_time > 0:
             center(stdscr, 3, announcement, COL["yellow"] | curses.A_BOLD)
         if reward_flash > 0:
-            center(stdscr, 4, "+$5 every 30 score!", COL["green"] | curses.A_BOLD)
+            reward_text = "GREEN +$10  BLUE +$20  VIP +$30" if game_mode == "timed" else "+$5 every 30 score!"
+            center(stdscr, 4, reward_text, COL["green"] | curses.A_BOLD)
         if start is None:
             center(stdscr, h // 2, "PRESS SPACE TO START", COL["yellow"] | curses.A_BOLD)
         bar = int(ammo / MAX_AMMO * 12)
@@ -1476,7 +1518,11 @@ def market(stdscr, save, wallet, audio):
                 if family_option.get("action") == "divorce":
                     status = "ACTION"
                 else:
-                    status = "EQUIPPED" if owned and family_option["key"] == save["family_type"] else ("OWNED" if owned else "$%d" % price)
+                    status = "EQUIPPED" if (
+                        owned
+                        and save.get("family_unlocked")
+                        and family_option["key"] == save["family_type"]
+                    ) else ("OWNED" if owned else "$%d" % price)
             elif owned:
                 if kind == "SIZE":
                     equipped = save["size"] == SIZES[size_i]["key"]
@@ -1702,7 +1748,7 @@ def main(stdscr):
     save = load_save()
     wallet = {"money": ADMIN_WALLET_AMOUNT if save.get("admin_unlimited") else load_wallet()}
     write_wallet(wallet["money"])
-    audio = Audio()
+    audio = Audio(save)
     try:
         menu(stdscr, save, wallet, audio)
     finally:
