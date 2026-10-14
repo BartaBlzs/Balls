@@ -590,7 +590,7 @@ def put(win, y, x, s, attr=0):
     if y < 0 or y >= h or x >= w:
         return
     if x < 0:
-        s, x = s[-x:], 0
+        s, x = s[-x:], 0 
     s = s[: w - x]
     if s:
         try:
