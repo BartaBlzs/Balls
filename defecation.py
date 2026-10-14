@@ -58,7 +58,7 @@ BOSS_HP = 12
 BOSS_SPEED = 5.0
 BOSS_ROCK_COOLDOWN = 1.8
 BOSS_ROCK_DAMAGE = 15
-FAMILY_PRICE = 10000
+FAMILY_PRICE = 2500
 
 # --------------------------------------------------------------------------- content
 
@@ -76,27 +76,27 @@ SOUNDS = [
 ]
 POOP_MODES = [
     dict(key="single", name="Single", count=1, cost=0, sound="fart"),
-    dict(key="double", name="Double", count=2, cost=1500, sound="fart1"),
-    dict(key="triple", name="Triple", count=3, cost=2500, sound="fart2"),
-    dict(key="shower", name="Shower", count=5, cost=5000, sound="fart2"),
+    dict(key="double", name="Double", count=2, cost=300, sound="fart1"),
+    dict(key="triple", name="Triple", count=3, cost=600, sound="fart2"),
+    dict(key="shower", name="Shower", count=5, cost=1000, sound="fart2"),
 ]
-SIZE_PRICES = {"small": 1200, "medium": 2200, "large": 3500, "mega": 6000}
-SOUND_PRICES = {"fart": 1200, "fart1": 1800, "fart2": 2600}
+SIZE_PRICES = {"small": 300, "medium": 600, "large": 1000, "mega": 1800}
+SOUND_PRICES = {"fart": 300, "fart1": 500, "fart2": 750}
 UPGRADES = [
-    dict(key="shield", name="Shield", price=5000),
-    dict(key="rapid_fire", name="Rapid-fire Laxative", price=6500),
-    dict(key="fast_move", name="Faster Pigeon Movement", price=4500),
-    dict(key="fast_reload", name="Faster Reload", price=4500),
+    dict(key="shield", name="Shield", price=800),
+    dict(key="rapid_fire", name="Rapid-fire Laxative", price=1100),
+    dict(key="fast_move", name="Faster Pigeon Movement", price=700),
+    dict(key="fast_reload", name="Faster Reload", price=700),
 ]
 FAMILY_OPTIONS = [
     dict(key="family", name="IM-PRESS HERE", price=FAMILY_PRICE, birds=3, partner="pink", baby=True, gender=None),
-    dict(key="condoms", name="IM-PRESS HERE + CONDOMS", price=FAMILY_PRICE + 5000, birds=2, partner="pink", baby=False),
-    dict(key="lesbian", name="LESBIAN", price=15000, birds=2, partner="pink", baby=False, gender="female"),
-    dict(key="gay", name="GAY", price=15000, birds=2, partner="white", baby=False, gender="male"),
+    dict(key="condoms", name="IM-PRESS HERE + CONDOMS", price=4000, birds=2, partner="pink", baby=False),
+    dict(key="lesbian", name="LESBIAN", price=3500, birds=2, partner="pink", baby=False, gender="female"),
+    dict(key="gay", name="GAY", price=3500, birds=2, partner="white", baby=False, gender="male"),
     dict(key="divorce", name="DIVORCE", price=0, birds=1, partner=None, baby=False, action="divorce"),
 ]
 FREE = {"size:small", "sound:fart"}
-CODE_REDEEM_COST = 1000
+CODE_REDEEM_COST = 250
 ADMIN_WALLET_AMOUNT = 999999999
 ADMIN_CODE_HASH = "395fcfb4f94a19b6242902470f4c80cca48eed86fdd65e60c2325339066a9edd"
 
@@ -771,9 +771,9 @@ def family_animation(stdscr, audio, save, wallet, family_option):
 
 class Person:
     KINDS = {
-        "normal": dict(head="o", mult=1, speed=(4, 8),   color="green"),
-        "chunky": dict(head="O", mult=1, speed=(3, 5),   color="cyan"),
-        "vip":    dict(head="$", mult=3, speed=(9, 13),  color="magenta"),
+        "normal": dict(head="o", mult=1, speed=(4, 8),   color="green",   money=10),
+        "chunky": dict(head="O", mult=1, speed=(3, 5),   color="blue",    money=20),
+        "vip":    dict(head="$", mult=3, speed=(9, 13),  color="magenta", money=30),
     }
 
     def __init__(self, w, edge=None):
@@ -1160,15 +1160,22 @@ def play(stdscr, save, wallet, audio):
                         proximity_mult = 2 if distance <= NEAR_PERSON_DISTANCE else 1
                         gained = PERSON_HIT_POINTS * Person.KINDS[victim.kind]["mult"] * proximity_mult
                         score += gained
-                        new_tier = score // 30
-                        if new_tier > reward_tier:
-                            bonus = (new_tier - reward_tier) * 5
-                            reward_tier = new_tier
+                        if game_mode == "timed":
+                            bonus = Person.KINDS[victim.kind]["money"]
                             wallet["money"] += bonus
                             write_wallet(wallet["money"])
                             reward_flash = 1.5
                             floaters.append([px + 1, max(2.0, py - 1.0), "+$%d" % bonus, 1.1])
-                        floaters.append([victim.x + 1, gl - 5.0, "+%d$" % gained, 1.0])
+                        else:
+                            new_tier = score // 30
+                            if new_tier > reward_tier:
+                                bonus = (new_tier - reward_tier) * 5
+                                reward_tier = new_tier
+                                wallet["money"] += bonus
+                                write_wallet(wallet["money"])
+                                reward_flash = 1.5
+                                floaters.append([px + 1, max(2.0, py - 1.0), "+$%d" % bonus, 1.1])
+                        floaters.append([victim.x + 1, gl - 5.0, "+%d SCORE" % gained, 1.0])
                         victim.shout = random.choice(VIP_SHOUTS if victim.kind == "vip" else SHOUTS)
                         victim.throws_rocks = True
                         rock_throw_queue.append(victim)
@@ -1382,7 +1389,7 @@ def play(stdscr, save, wallet, audio):
             main_color = COL["magenta"]
         put_sprite(stdscr, int(py), int(px), frames[int(flap) % 2], main_color | curses.A_BOLD)
         if hit_notice > 0:
-            put(stdscr, max(2, int(py) - 1), int(px) - 2, "-10 HP  -10 SCORE", COL["red"] | curses.A_BOLD)
+            put(stdscr, max(2, int(py) - 1), int(px) - 2, "ROCK HIT: -10 HP  -10 SCORE", COL["red"] | curses.A_BOLD)
 
         put(stdscr, 0, 1, "SCORE %05d" % score, COL["yellow"] | curses.A_BOLD)
         put(stdscr, 0, 16, "LV %d" % (difficulty_tier + 1), COL["magenta"] | curses.A_BOLD)
@@ -1396,7 +1403,8 @@ def play(stdscr, save, wallet, audio):
         if announcement_time > 0:
             center(stdscr, 3, announcement, COL["yellow"] | curses.A_BOLD)
         if reward_flash > 0:
-            center(stdscr, 4, "+$5 every 30 score!", COL["green"] | curses.A_BOLD)
+            reward_text = "GREEN +$10  BLUE +$20  VIP +$30" if game_mode == "timed" else "+$5 every 30 score!"
+            center(stdscr, 4, reward_text, COL["green"] | curses.A_BOLD)
         if start is None:
             center(stdscr, h // 2, "PRESS SPACE TO START", COL["yellow"] | curses.A_BOLD)
         bar = int(ammo / MAX_AMMO * 12)
